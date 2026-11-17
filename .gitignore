@@ -1,0 +1,9 @@
+# Исключаем каталоги
+**/.git/
+**/.qtcreator/
+**/dest/
+**/build/
+*.log
+*.xz
+*.rar
+

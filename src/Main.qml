@@ -1,0 +1,530 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import Torchki_and_Zombie
+
+Window {
+    id: rootWindow
+    width: 1280
+    height: 720
+    visible: true
+    title: "Torchki and Zombie"
+    // Фон вокруг карты автоматически берет цвет воды из крайнего пикселя PNG
+    color: gameWorld.waterColor
+
+    // Игровая логика на C++
+    GameWorld {
+        id: gameWorld
+    }
+
+    // Игровая область с камерой (перетаскивание правой кнопкой + зум колесиком)
+    Item {
+        id: viewport
+        anchors.fill: parent
+        clip: true
+
+        Item {
+            id: cameraContainer
+            width: gameWorld.mapWidth > 0 ? gameWorld.mapWidth : 1600
+            height: gameWorld.mapHeight > 0 ? gameWorld.mapHeight : 800
+            x: (viewport.width - width * scale) / 2
+            y: (viewport.height - height * scale) / 2
+            transformOrigin: Item.TopLeft
+            scale: 1.0
+
+            MapRenderer {
+                anchors.fill: parent
+                world: gameWorld
+            }
+            // Расширяющееся круглое кольцо при применении любого инструмента
+            Rectangle {
+                id: toolPulseRing
+                width: 90
+                height: 90
+                radius: width * 0.5
+                color: "transparent"
+                border.color: "#4299e1"
+                border.width: 2.5
+                visible: false
+                z: 7
+
+                Connections {
+                    target: gameWorld
+                    function onPulseWaveTriggered(wx, wy, rad, clr) {
+                        toolPulseRing.width = rad * 2
+                        toolPulseRing.height = rad * 2
+                        toolPulseRing.radius = rad
+                        toolPulseRing.x = wx - rad
+                        toolPulseRing.y = wy - rad
+                        toolPulseRing.border.color = clr
+                        toolPulseRing.visible = true
+                        toolRingAnim.restart()
+                    }
+                }
+
+                ParallelAnimation {
+                    id: toolRingAnim
+                    NumberAnimation { target: toolPulseRing; property: "scale"; from: 0.1; to: 1.05; duration: 450; easing.type: Easing.OutQuad }
+                    NumberAnimation { target: toolPulseRing; property: "opacity"; from: 0.95; to: 0.0; duration: 450 }
+                    onFinished: toolPulseRing.visible = false
+                }
+            }
+
+            // ореол пламени вокруг горящих зданий
+            Repeater {
+                model: gameWorld.burningLights
+                delegate: Item {
+                    x: modelData.cx - modelData.radius
+                    y: modelData.cy - modelData.radius
+                    width: modelData.radius * 2
+                    height: modelData.radius * 2
+                    enabled: true
+
+                    // 1. Внешний широкий ореол (мягкий красно-оранжевый свет)
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: width / 2
+                        color: "#1aff4500"
+                    }
+
+                    // 2. Средний слой (насыщенный огонь)
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: parent.width * 0.65
+                        height: width
+                        radius: width / 2
+                        color: "#2eff6a00"
+                    }
+
+                    // 3. Внутренний слой (яркий жар)
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: parent.width * 0.35
+                        height: width
+                        radius: width / 2
+                        color: "#4dffae00"
+                    }
+                }
+            }
+
+
+            // Сумма дохода в центре производственных зданий (офисов и заводов)
+            Repeater {
+                model: gameWorld.workplaceLabels
+                delegate: Text {
+                    x: modelData.cx - width * 0.5
+                    y: modelData.cy - height * 0.5
+                    visible: modelData.incomeText != "+0.00₽"
+                    text: modelData.incomeText
+                    color: modelData.active ? "#fefcbf" : "#718096"
+                    font.pixelSize: 5
+                    font.bold: true
+                    style: Text.Outline
+                    styleColor: "#1a202c"
+                }
+            }
+
+
+
+            // Пульсирующий маркер места последней вспышки заражения
+            Rectangle {
+                id: outbreakPing
+                width: 60; height: 60
+                radius: 30
+                color: "transparent"
+                border.color: "#ff3333"
+                border.width: 3
+                visible: false
+
+                Connections {
+                    target: gameWorld
+                    function onOutbreakOccurred(x, y, index) {
+                        outbreakPing.x = x - outbreakPing.width / 2
+                        outbreakPing.y = y - outbreakPing.height / 2
+                        outbreakPing.visible = true
+                        pingAnim.restart()
+                    }
+                }
+
+                SequentialAnimation {
+                    id: pingAnim
+                    NumberAnimation { target: outbreakPing; property: "scale"; from: 0.2; to: 2.5; duration: 1200 }
+                    ScriptAction { script: outbreakPing.visible = false }
+                }
+            }
+            // Эвакуационные выходы (6 точек из LevelDefinition)
+            Repeater {
+                model: gameWorld.evacPoints
+                delegate: Item {
+                    x: modelData.x
+                    y: modelData.y
+                    z: 5
+
+                    // 1. Зеленый круг со стрелкой (масштабируется вместе с картой)
+                    Rectangle {
+                        id: evacCircle
+                        width: 24
+                        height: 24
+                        radius: 12
+                        x: -width * 0.5
+                        y: -height * 0.5
+                        color: "#3348bb78"
+                        border.color: "#48bb78"
+                        border.width: 1.5
+
+                        // Детальная пиксельная стрелка (шаг 1 px, в 2 раза плотнее)
+                        Item {
+                            anchors.centerIn: parent
+                            width: 14
+                            height: 15
+                            smooth: false
+                            antialiasing: false
+
+                            // 1. Тёмная пиксельная обводка (толщина 1 px)
+                            Rectangle { x: 6; y: 0; width: 2;  height: 1;  color: "#0f141d" }
+                            Rectangle { x: 5; y: 1; width: 4;  height: 1;  color: "#0f141d" }
+                            Rectangle { x: 4; y: 2; width: 6;  height: 1;  color: "#0f141d" }
+                            Rectangle { x: 3; y: 3; width: 8;  height: 1;  color: "#0f141d" }
+                            Rectangle { x: 2; y: 4; width: 10; height: 1;  color: "#0f141d" }
+                            Rectangle { x: 1; y: 5; width: 12; height: 1;  color: "#0f141d" }
+                            Rectangle { x: 0; y: 6; width: 14; height: 3;  color: "#0f141d" }
+                            Rectangle { x: 4; y: 9; width: 6;  height: 6;  color: "#0f141d" }
+
+                            // 2. Основное зелёное тело стрелки (ступеньки по 1 px)
+                            Rectangle { x: 6; y: 1; width: 2;  height: 1;  color: "#68d391" }
+                            Rectangle { x: 5; y: 2; width: 4;  height: 1;  color: "#68d391" }
+                            Rectangle { x: 4; y: 3; width: 6;  height: 1;  color: "#68d391" }
+                            Rectangle { x: 3; y: 4; width: 8;  height: 1;  color: "#68d391" }
+                            Rectangle { x: 2; y: 5; width: 10; height: 1;  color: "#68d391" }
+                            Rectangle { x: 1; y: 6; width: 12; height: 2;  color: "#68d391" }
+                            Rectangle { x: 5; y: 8; width: 4;  height: 6;  color: "#68d391" }
+
+                            // 3. Лёгкий светлый блик по левой грани для объёма (как на референсе)
+                            Rectangle { x: 5; y: 8; width: 1;  height: 5;  color: "#9ae6b4" }
+                        }
+
+                    }
+
+
+                    // 2. Адаптивная подпись названия выхода над кругом
+                    Text {
+                        text: modelData.name
+                        color: "#9ae6b4"
+                        font.pixelSize: 11
+                        font.bold: true
+                        style: Text.Outline
+                        styleColor: "#0f141d"
+
+                        // Компенсация масштаба: при отдалении карты надпись не превращается в кашу
+                        transformOrigin: Item.Bottom
+                        scale: Math.min(2.2, Math.max(0.55, 0.85 / cameraContainer.scale))
+
+                        x: -width * 0.5
+                        y: -evacCircle.height * 0.5 - height - 2
+                    }
+                }
+            }
+
+            // Прицел радиуса 250м с автопривязкой (20м) при выборе инструмента Эвакуации
+            Rectangle {
+                id: evacPreviewCircle
+                visible: gameWorld.selectedTool === 3 && mapMouseArea.containsMouse
+                width: 500  // Радиус 250м -> диаметр 500м
+                height: 500
+                radius: 250
+                color: mapMouseArea.snappedEvac ? "#1848bb78" : "#10fc8181"
+                border.color: mapMouseArea.snappedEvac ? "#68d391" : "#fc8181"
+                border.width: 1.5
+                z: 6
+            }
+
+            // Активные зоны эвакуации с таймером наверху круга (как на 2-м скриншоте)
+            Repeater {
+                model: gameWorld.activeEvacuations
+                delegate: Item {
+                    x: modelData.x
+                    y: modelData.y
+                    z: 6
+
+                    Rectangle {
+                        width: 500
+                        height: 500
+                        radius: 250
+                        x: -250
+                        y: -250
+                        color: "#1448bb78"
+                        border.color: "#48bb78"
+                        border.width: 1.5
+                    }
+
+                    Text {
+                        text: "Эвакуация  " + modelData.timeLeft + "сек  (" + modelData.boarded + "/50)"
+                        color: "#9ae6b4"
+                        font.pixelSize: 10
+                        font.bold: true
+                        style: Text.Outline
+                        styleColor: "#0f141d"
+                        transformOrigin: Item.Bottom
+                        scale: Math.min(2.0, Math.max(0.6, 0.85 / cameraContainer.scale))
+                        x: -width * 0.5
+                        y: -250 - height - 4
+                    }
+                }
+            }
+
+            MouseArea {
+                id: mapMouseArea
+                anchors.fill: parent
+                hoverEnabled: true
+                acceptedButtons: Qt.LeftButton
+                property bool snappedEvac: false
+
+                onPositionChanged: (mouse) => {
+                    if (gameWorld.selectedTool === 3) {
+                        let snap = gameWorld.snapEvacPoint(mouse.x, mouse.y, 20.0)
+                        snappedEvac = snap.snapped
+                        evacPreviewCircle.x = snap.x - 250
+                        evacPreviewCircle.y = snap.y - 250
+                    }
+                }
+
+                onClicked: (mouse) => {
+                    gameWorld.useToolAt(mouse.x, mouse.y)
+                }
+            }
+
+        }
+
+        // Слой ночного затемнения с вырезанием круглых зон освещения (70м) вокруг пожаров
+        Canvas {
+            id: nightOverlay
+            anchors.fill: parent
+            enabled: false
+            visible: gameWorld.nightDarkness > 0.001
+
+            property real darkness: gameWorld.nightDarkness
+            property var lights: gameWorld.burningLights
+            property real camX: cameraContainer.x
+            property real camY: cameraContainer.y
+            property real camScale: cameraContainer.scale
+
+            onDarknessChanged: requestPaint()
+            onLightsChanged: requestPaint()
+            onCamXChanged: requestPaint()
+            onCamYChanged: requestPaint()
+            onCamScaleChanged: requestPaint()
+
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                if (darkness <= 0.001) return
+
+                // Заливаем весь экран ночной темнотой
+                ctx.globalCompositeOperation = "source-over"
+                ctx.fillStyle = Qt.rgba(0.024, 0.043, 0.098, darkness)
+                ctx.fillRect(0, 0, width, height)
+
+                // Вырезаем круглые зоны света (70м) вокруг горящих зданий
+                if (lights && lights.length > 0) {
+                    ctx.globalCompositeOperation = "destination-out"
+                    for (var i = 0; i < lights.length; ++i) {
+                        var sx = camX + lights[i].cx * camScale
+                        var sy = camY + lights[i].cy * camScale
+                        var sr = lights[i].radius * camScale
+
+                        var grad = ctx.createRadialGradient(sx, sy, sr * 0.25, sx, sy, sr)
+                        grad.addColorStop(0.0, "rgba(0, 0, 0, 1.0)") // Внутри светло как днём
+                        grad.addColorStop(0.7, "rgba(0, 0, 0, 0.85)")
+                        grad.addColorStop(1.0, "rgba(0, 0, 0, 0.0)") // Плавный переход в ночь
+
+                        ctx.fillStyle = grad
+                        ctx.beginPath()
+                        ctx.arc(sx, sy, sr, 0, Math.PI * 2)
+                        ctx.fill()
+                    }
+                }
+            }
+        }
+
+
+        // Перетаскивание карты правой кнопкой мыши
+        DragHandler {
+            target: cameraContainer
+            acceptedButtons: Qt.RightButton
+        }
+
+        // Масштабирование колесиком мыши относительно центра экрана
+        WheelHandler {
+            onWheel: (event) => {
+                         let oldScale = cameraContainer.scale
+                         let factor = event.angleDelta.y > 0 ? 1.15 : 0.85
+                         let newScale = Math.max(0.25, Math.min(5.0, oldScale * factor))
+                         if (newScale === oldScale) return
+
+                         // Координаты центра экрана
+                         let centerX = viewport.width * 0.5
+                         let centerY = viewport.height * 0.5
+
+                         // Вычисляем мировую точку карты, которая сейчас находится ровно в центре экрана
+                         let worldCenterX = (centerX - cameraContainer.x) / oldScale
+                         let worldCenterY = (centerY - cameraContainer.y) / oldScale
+
+                         // Применяем новый масштаб и возвращаем эту мировую точку в центр экрана
+                         cameraContainer.scale = newScale
+                         cameraContainer.x = centerX - worldCenterX * newScale
+                         cameraContainer.y = centerY - worldCenterY * newScale
+                     }
+        }
+    }
+
+    // Верхняя панель статистики (HUD)
+    Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: 60
+        color: "#dd141923"
+        border.color: "#2d3748"
+        border.width: 1
+
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 16
+            anchors.rightMargin: 16
+            spacing: 24
+            Text {
+                text: "День " + gameWorld.dayNumber + "  " + gameWorld.formattedTime + (gameWorld.isNight ? " (Ночь)" : " (День)")
+                color: gameWorld.isNight ? "#63b3ed" : "#f6e05e"
+                font.pixelSize: 14
+                font.bold: true
+            }
+
+
+            Text { text: "Здоровые: " + gameWorld.citizensCount; color: "#e2e8f0"; font.pixelSize: 14; font.bold: true }
+            Text { text: "Зомби: " + gameWorld.zombiesCount; color: "#fc8181"; font.pixelSize: 14; font.bold: true }
+            Text { text: "Солдаты: " + gameWorld.eliminatedCount; color: "#68d391"; font.pixelSize: 14; font.bold: true }
+
+            Item { Layout.fillWidth: true }
+
+            Column {
+                spacing: 1
+                Layout.alignment: Qt.AlignVCenter
+
+                Text {
+                    text: "Бюджет"
+                    color: "#a0aec0"
+                    font.pixelSize: 10
+                    font.bold: true
+                    anchors.right: parent.right
+                }
+                Text {
+                    text: gameWorld.budget.toLocaleString(Qt.locale("ru_RU"), "f", 0) + " ₽"
+                    color: "#48bb78"
+                    font.pixelSize: 16
+                    font.bold: true
+                    anchors.right: parent.right
+                }
+                Text {
+                    text: "+" + gameWorld.incomePerSec.toFixed(0) + " ₽ / сек"
+                    color: "#68d391"
+                    font.pixelSize: 11
+                    anchors.right: parent.right
+                }
+            }
+
+
+            Button {
+                text: gameWorld.paused ? "▶ Продолжить" : "⏸ Пауза"
+                palette.buttonText: "black"
+                onClicked: gameWorld.togglePause()
+            }
+            Button {
+                text: gameWorld.speedMultiplier + "x"
+                palette.buttonText: "black"
+                onClicked: gameWorld.toggleSpeed()
+            }
+            Button {
+                text: "Заново"
+                palette.buttonText: "black"
+                onClicked: gameWorld.regenerateMap()
+            }
+        }
+    }
+
+    // Левая панель легенды юнитов
+    Rectangle {
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.topMargin: 64
+        anchors.leftMargin: 12
+        width: 150
+        height: 175
+        color: "#cc141923"
+        border.color: "#2d3748"
+        radius: 4
+
+        Column {
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 8
+
+            Repeater {
+                            model: [
+                                { label: "Житель", clr: "#f0f0f0" },
+                                { label: "В панике", clr: "#ff7373" },
+                                { label: "Инфицирован", clr: "#ffaf2d" },
+                                { label: "Вакцинированный", clr: "#50b4ff" },
+                                { label: "Зомби", clr: "#ff3232" },
+                                { label: "Солдаты", clr: "#46e678" }
+                            ]
+                delegate: Row {
+                    spacing: 8
+                    Rectangle { width: 10; height: 10; color: modelData.clr; anchors.verticalCenter: parent.verticalCenter }
+                    Text { text: modelData.label; color: "#cbd5e0"; font.pixelSize: 12 }
+                }
+            }
+        }
+    }
+
+    // Нижняя панель выбора способностей
+    Row {
+        anchors.bottom: parent.bottom
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottomMargin: 14
+        spacing: 12
+
+        Repeater {
+            model: [
+                { id: 1, title: "Вакцинирующая капсула", desc: "Лечит в радиусе", cost: "90 ₽", accent: "#4299e1" },
+                { id: 2, title: "Отряд десанта", desc: "Высадка 5 солдат на точку", cost: "200 ₽", accent: "#48bb78" },
+                { id: 3, title: "Точка эвакуации", desc: "Инициация эвакуации", cost: "75 ₽", accent: "#38b2ac" }
+            ]
+
+            delegate: Rectangle {
+                width: 190
+                height: 82
+                color: gameWorld.selectedTool === modelData.id ? "#2b3648" : "#dd18202c"
+                border.color: gameWorld.selectedTool === modelData.id ? modelData.accent : "#4a5568"
+                border.width: gameWorld.selectedTool === modelData.id ? 2 : 1
+                radius: 4
+
+                Column {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 4
+
+                    Text { text: modelData.title; color: modelData.accent; font.bold: true; font.pixelSize: 13 }
+                    Text { text: modelData.desc; color: "#a0aec0"; font.pixelSize: 11; wrapMode: Text.WordWrap; width: parent.width }
+                    Text { text: modelData.cost; color: "#e2e8f0"; font.bold: true; font.pixelSize: 12 }
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        gameWorld.selectedTool = (gameWorld.selectedTool === modelData.id) ? 0 : modelData.id
+                    }
+                }
+            }
+        }
+    }
+}
