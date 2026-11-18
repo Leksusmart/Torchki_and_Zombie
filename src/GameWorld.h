@@ -48,6 +48,7 @@ private: // функции
     void rebuildBuildingOverlays();
     float roadWidth() const { return g_generator.roadWidth(); }
     void updateSelectedBuildingInfo();
+    void peopleUpdateActions();
 
     // AI.h
     void updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObject> &buildings);

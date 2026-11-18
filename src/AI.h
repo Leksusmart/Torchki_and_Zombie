@@ -377,45 +377,50 @@ void GameWorld::applyFireAvoidanceAndDamage(Unit &u,
                                             float dt,
                                             const std::vector<BuildingObject> &buildings)
 {
-    if (u.fireDamageCooldownSec > 0.0F) {
-        u.fireDamageCooldownSec -= dt;
-    }
-    float rw = roadWidth();
-    bool isHumanOrSoldier = (u.type == UnitType::Citizen || u.type == UnitType::Vaccinated
-                             || u.type == UnitType::Soldier);
-    for (const auto &b : buildings) {
-        if (!b.isBurning)
-            continue;
-        float lightRadius = 40.0F + b.area / 5.0F;
-        float fireRadius = lightRadius * 0.25F;
-        float avoidRadius = fireRadius + rw * 0.75F;
-        float dx = u.x - b.cx;
-        float dy = u.y - b.cy;
-        float distSq = dx * dx + dy * dy;
-        if (distSq <= fireRadius * fireRadius) {
-            if (u.fireDamageCooldownSec <= 0.0F) {
-                u.fireDamageCooldownSec = 0.5F;
-                u.hp -= 2;
-                spawnBurstParticles(u.x, u.y, 4, 255, 120, 30);
-            }
-        }
-        if (isHumanOrSoldier && distSq <= avoidRadius * avoidRadius && distSq > 0.001F) {
-            float dist = std::sqrt(distSq);
-            float awayX = dx / dist;
-            float awayY = dy / dist;
-            float tangentX = -awayY;
-            float tangentY = awayX;
-            float speed = std::hypot(u.vx, u.vy);
-            if (speed < BASE_CITIZEN_SPEED)
-                speed = RUN_SPEED;
-            float steerX = awayX * 1.4F + tangentX * 0.6F;
-            float steerY = awayY * 1.4F + tangentY * 0.6F;
-            float steerLen = std::hypot(steerX, steerY);
-            u.vx = (steerX / steerLen) * speed;
-            u.vy = (steerY / steerLen) * speed;
-        }
-    }
+    Q_UNUSED(u);
+    Q_UNUSED(dt);
+    Q_UNUSED(buildings);
+    // Огонь служит только визуальным эффектом разрушенного здания и не наносит урон
 }
+//     if (u.fireDamageCooldownSec > 0.0F) {
+//         u.fireDamageCooldownSec -= dt;
+//     }
+//     float rw = roadWidth();
+//     bool isHumanOrSoldier = (u.type == UnitType::Citizen || u.type == UnitType::Vaccinated
+//                              || u.type == UnitType::Soldier);
+//     for (const auto &b : buildings) {
+//         if (!b.isBurning)
+//             continue;
+//         float lightRadius = 40.0F + b.area / 5.0F;
+//         float fireRadius = lightRadius * 0.25F;
+//         float avoidRadius = fireRadius + rw * 0.75F;
+//         float dx = u.x - b.cx;
+//         float dy = u.y - b.cy;
+//         float distSq = dx * dx + dy * dy;
+//         if (distSq <= fireRadius * fireRadius) {
+//             if (u.fireDamageCooldownSec <= 0.0F) {
+//                 u.fireDamageCooldownSec = 0.5F;
+//                 u.hp -= 2;
+//                 spawnBurstParticles(u.x, u.y, 4, 255, 120, 30);
+//             }
+//         }
+//         if (isHumanOrSoldier && distSq <= avoidRadius * avoidRadius && distSq > 0.001F) {
+//             float dist = std::sqrt(distSq);
+//             float awayX = dx / dist;
+//             float awayY = dy / dist;
+//             float tangentX = -awayY;
+//             float tangentY = awayX;
+//             float speed = std::hypot(u.vx, u.vy);
+//             if (speed < BASE_CITIZEN_SPEED)
+//                 speed = RUN_SPEED;
+//             float steerX = awayX * 1.4F + tangentX * 0.6F;
+//             float steerY = awayY * 1.4F + tangentY * 0.6F;
+//             float steerLen = std::hypot(steerX, steerY);
+//             u.vx = (steerX / steerLen) * speed;
+//             u.vy = (steerY / steerLen) * speed;
+//         }
+//     }
+// }
 void GameWorld::applyWallRepulsion(Unit &u, float dt)
 {
     const float probeDist = (u.insideBuildingId != -1) ? 1.2F : (roadWidth() * 0.125F);
