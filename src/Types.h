@@ -93,7 +93,7 @@ struct LevelConfig
     int initialCitizens = 2000;
     double initialBudget = 300.0;
     float startHour = 8.0F;
-    float gameHoursPerSec = 0.15F;
+    float gameHoursPerSec = 0.6F; // 0.15F
     std::vector<OutbreakEvent> outbreaks;
 };
 
@@ -247,7 +247,7 @@ struct Unit
     bool hasLastKnownTarget = false; // Помнит ли последнюю позицию цели
     QPointF lastKnownTargetPos;      // Координаты, где цель скрылась за углом
 
-    bool isNightShift = false;
+    bool isNightWorker = false;
     int targetBuildingId = -1;
     int insideBuildingId = -1;
 

@@ -107,6 +107,10 @@ Window {
                 }
             }
 
+            Text {
+                visible: true
+                text: parent.scale
+            }
 
             // Сумма дохода в центре производственных зданий (офисов и заводов)
             Repeater {
@@ -242,7 +246,7 @@ Window {
                 scale: Math.min(2.0, Math.max(0.55, 0.9 / cameraContainer.scale))
 
                 x: (gameWorld.selectedBuildingInfo.cx || 0) - width * 0.5
-                y: (gameWorld.selectedBuildingInfo.topY || 0) - height - 25
+                y: (gameWorld.selectedBuildingInfo.topY || 0) - height - 10
 
                 Column {
                     id: infoCol

@@ -28,10 +28,10 @@ void GameWorld::updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObj
     }
 
     bool shouldBeAtWork = false;
-    if (!u.isNightShift) {
-        shouldBeAtWork = (g_timeOfDayHours >= 8.0F && g_timeOfDayHours < 18.0F);
-    } else {
+    if (u.isNightWorker) {
         shouldBeAtWork = (g_timeOfDayHours >= 20.0F || g_timeOfDayHours < 6.0F);
+    } else {
+        shouldBeAtWork = (g_timeOfDayHours >= 8.0F && g_timeOfDayHours < 18.0F);
     }
 
     // --- 1. ЭВАКУАЦИЯ ---
@@ -177,7 +177,7 @@ void GameWorld::updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObj
     } else if (!shouldBeAtWork
                && (u.state == UnitState::Working || u.state == UnitState::GoingToWork
                    || canSwitchFromWalk)) {
-        int homeId = findNearestAvailableBuilding(u.x, u.y, true);
+        int homeId = findNearestAvailableBuilding(u.x, u.y, false);
         if (homeId != -1) {
             buildings[homeId].reservedOccupants++; // Мгновенная бронь места!
             u.targetBuildingId = homeId;

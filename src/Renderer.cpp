@@ -64,7 +64,8 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         // Узел 2: Юниты
         unitsNode = new QSGGeometryNode();
         auto *uGeom = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0);
-        uGeom->setDrawingMode(QSGGeometry::DrawTriangles);
+        uGeom->setDrawingMode(
+            QSGGeometry::DrawTriangles); // TODO: DrawPoints при scale < 1 else DrawTriangles
         unitsNode->setGeometry(uGeom);
         unitsNode->setFlags(QSGNode::OwnsGeometry | QSGNode::OwnsMaterial);
         unitsNode->setMaterial(new QSGVertexColorMaterial());

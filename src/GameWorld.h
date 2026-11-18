@@ -48,7 +48,29 @@ private: // функции
     void rebuildBuildingOverlays();
     float roadWidth() const { return g_generator.roadWidth(); }
     void updateSelectedBuildingInfo();
-    void peopleUpdateActions();
+    // Поведение юнитов (разбито из бывшего монолита peopleUpdateActions)
+    void peopleUpdateActions(float dt,
+                             std::vector<BuildingObject> &buildings,
+                             const std::vector<size_t> &activeZombies,
+                             const std::vector<size_t> &panickingOutdoors,
+                             const std::vector<size_t> &zombieTargets,
+                             bool &buildingsVisualDirty);
+    void updateCitizenBehavior(Unit &u,
+                               size_t unitIndex,
+                               float dt,
+                               std::vector<BuildingObject> &buildings,
+                               const std::vector<size_t> &activeZombies,
+                               const std::vector<size_t> &panickingOutdoors);
+    void updateSoldierBehavior(Unit &u,
+                               float dt,
+                               std::vector<BuildingObject> &buildings,
+                               const std::vector<size_t> &activeZombies);
+    void updateZombieBehavior(Unit &u,
+                              float dt,
+                              std::vector<BuildingObject> &buildings,
+                              const std::vector<size_t> &zombieTargets,
+                              bool &buildingsVisualDirty);
+    void stepUnitMovement(Unit &u, float dt, std::vector<BuildingObject> &buildings);
 
     // AI.h
     void updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObject> &buildings);
