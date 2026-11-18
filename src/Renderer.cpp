@@ -1,40 +1,40 @@
-#include "MapRenderer.h"
+#include "Renderer.h"
 #include <QQuickWindow>
 #include <cmath>
 
-MapRenderer::MapRenderer(QQuickItem *parent)
+Renderer::Renderer(QQuickItem *parent)
     : QQuickItem(parent)
 {
     setFlag(ItemHasContents, true);
 }
 
-void MapRenderer::setWorld(GameWorld *world)
+/*Q_PROPERTY*/ void Renderer::setWorld(GameWorld *world)
 {
-    if (m_world == world)
+    if (g_world == world)
         return;
-    if (m_world)
-        disconnect(m_world, nullptr, this, nullptr);
+    if (g_world)
+        disconnect(g_world, nullptr, this, nullptr);
 
-    m_world = world;
-    if (m_world) {
-        connect(m_world, &GameWorld::mapUpdated, this, [this]() {
-            m_mapDirty = true;
+    g_world = world;
+    if (g_world) {
+        connect(g_world, &GameWorld::mapUpdated, this, [this]() {
+            g_mapDirty = true;
             update();
         });
-        connect(m_world, &GameWorld::unitsUpdated, this, [this]() {
-            m_unitsDirty = true;
+        connect(g_world, &GameWorld::unitsUpdated, this, [this]() {
+            g_unitsDirty = true;
             update();
         });
-        m_mapDirty = true;
-        m_unitsDirty = true;
+        g_mapDirty = true;
+        g_unitsDirty = true;
         update();
     }
     emit worldChanged();
 }
 
-QSGNode *MapRenderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
+QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 {
-    if (!m_world || !window())
+    if (!g_world || !window())
         return oldNode;
 
     QSGNode *rootNode = oldNode;
@@ -95,36 +95,38 @@ QSGNode *MapRenderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         effectsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(4));
     }
 
-    if (m_mapDirty) {
-        const QImage &bgImg = m_world->backgroundImage();
-        if (!bgImg.isNull()) {
-            bgNode->setTexture(window()->createTextureFromImage(bgImg));
-            bgNode->setRect(0, 0, bgImg.width(), bgImg.height());
+    if (g_mapDirty) {
+        if (!bgNode->texture()) {
+            const QImage &bgImg = g_world->backgroundImage();
+            if (!bgImg.isNull()) {
+                bgNode->setTexture(window()->createTextureFromImage(bgImg));
+                bgNode->setRect(0, 0, bgImg.width(), bgImg.height());
+            }
         }
-        fillGeometry(buildingsNode->geometry(), m_world->buildingsGeometry());
+        fillGeometry(buildingsNode->geometry(), g_world->buildingsGeometry());
         buildingsNode->markDirty(QSGNode::DirtyGeometry);
-        m_mapDirty = false;
+        g_mapDirty = false;
     }
 
-    if (m_unitsDirty) {
-        fillCircleGeometry(unitsNode->geometry(), m_world->unitGeometry(), 7);
+    if (g_unitsDirty) {
+        fillCircleGeometry(unitsNode->geometry(), g_world->unitGeometry(), 7);
         unitsNode->markDirty(QSGNode::DirtyGeometry);
 
-        fillGeometry(overlaysNode->geometry(), m_world->buildingOverlaysGeometry());
+        fillGeometry(overlaysNode->geometry(), g_world->buildingOverlaysGeometry());
         overlaysNode->markDirty(QSGNode::DirtyGeometry);
 
-        fillGeometry(effectsNode->geometry(), m_world->effectsGeometry());
+        fillGeometry(effectsNode->geometry(), g_world->effectsGeometry());
         effectsNode->markDirty(QSGNode::DirtyGeometry);
 
-        m_unitsDirty = false;
+        g_unitsDirty = false;
     }
 
     return rootNode;
 }
 
-void MapRenderer::fillCircleGeometry(QSGGeometry *geometry,
-                                     const std::vector<RenderQuad> &circles,
-                                     int segments)
+void Renderer::fillCircleGeometry(QSGGeometry *geometry,
+                                  const std::vector<RenderQuad> &circles,
+                                  int segments)
 {
     // Каждый сегмент круга — это 1 треугольник от центра к краю (3 вершины)
     geometry->allocate(static_cast<int>(circles.size() * segments * 3));
@@ -161,7 +163,7 @@ void MapRenderer::fillCircleGeometry(QSGGeometry *geometry,
     }
 }
 
-void MapRenderer::fillGeometry(QSGGeometry *geometry, const std::vector<RenderQuad> &quads)
+void Renderer::fillGeometry(QSGGeometry *geometry, const std::vector<RenderQuad> &quads)
 {
     geometry->allocate(static_cast<int>(quads.size() * 6));
     auto *v = geometry->vertexDataAsColoredPoint2D();

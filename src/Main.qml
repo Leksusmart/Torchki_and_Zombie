@@ -32,7 +32,7 @@ Window {
             transformOrigin: Item.TopLeft
             scale: 1.0
 
-            MapRenderer {
+            Renderer {
                 anchors.fill: parent
                 world: gameWorld
             }
@@ -225,6 +225,51 @@ Window {
                 }
             }
 
+            // Информационная карточка (overlay) над выбранным зданием
+            Rectangle {
+                id: buildingInfoOverlay
+                visible: gameWorld.selectedBuildingInfo.valid === true
+                width: infoCol.implicitWidth + 14
+                height: infoCol.implicitHeight + 10
+                color: "#ee141923"
+                border.color: "#63b3ed"
+                border.width: 1
+                radius: 4
+                z: 9
+
+                // Компенсация масштаба камеры, чтобы текст читался при любом зуме
+                transformOrigin: Item.Bottom
+                scale: Math.min(2.0, Math.max(0.55, 0.9 / cameraContainer.scale))
+
+                x: (gameWorld.selectedBuildingInfo.cx || 0) - width * 0.5
+                y: (gameWorld.selectedBuildingInfo.topY || 0) - height - 25
+
+                Column {
+                    id: infoCol
+                    anchors.centerIn: parent
+                    spacing: 2
+
+                    Text {
+                        text: gameWorld.selectedBuildingInfo.type || ""
+                        color: "#63b3ed"
+                        font.pixelSize: 10
+                        font.bold: true
+                    }
+                    Text {
+                        text: "Люди: " + (gameWorld.selectedBuildingInfo.occupants || 0)
+                              + " / " + (gameWorld.selectedBuildingInfo.capacity || 0)
+                        color: "#e2e8f0"
+                        font.pixelSize: 9
+                    }
+                    Text {
+                        text: "Здоровье: " + (gameWorld.selectedBuildingInfo.health || 0)
+                              + " / " + (gameWorld.selectedBuildingInfo.maxHealth || 0)
+                        color: "#68d391"
+                        font.pixelSize: 9
+                    }
+                }
+            }
+
             // Прицел радиуса 250м с автопривязкой (20м) при выборе инструмента Эвакуации
             Rectangle {
                 id: evacPreviewCircle
@@ -289,8 +334,13 @@ Window {
                 }
 
                 onClicked: (mouse) => {
-                    gameWorld.useToolAt(mouse.x, mouse.y)
+                    if (gameWorld.selectedTool === 0) {
+                        gameWorld.selectBuildingAt(mouse.x, mouse.y)
+                    } else {
+                        gameWorld.useToolAt(mouse.x, mouse.y)
+                    }
                 }
+
             }
 
         }
