@@ -23,7 +23,7 @@ void GameWorld::callDropHelicopter(float targetX, float targetY)
     heli.dirX = dirX;
     heli.dirY = dirY;
     heli.angleRad = angle;
-    heli.hoverTimerSec = 2.0F;
+    heli.hoverTimerSec = 1.0F;
     heli.phase = DropHelicopter::Phase::Approaching;
 
     // 2. Добавление в активный список
@@ -90,7 +90,7 @@ void GameWorld::moveApproachingHelicopter(DropHelicopter &heli, float dt)
 
     // 2. Расчёт скорости с торможением за 50м
     const float cruiseSpeed = 135.0F;
-    const float minLandingSpeed = 18.0F;
+    const float minLandingSpeed = 12.0F;
     float speed = cruiseSpeed;
     if (dist < 50.0F) {
         float t = std::clamp(dist / 50.0F, 0.0F, 1.0F);
@@ -102,7 +102,6 @@ void GameWorld::moveApproachingHelicopter(DropHelicopter &heli, float dt)
     if (dist <= step || dist < 1.0F) {
         heli.pos = heli.targetPos;
         heli.phase = DropHelicopter::Phase::Hovering;
-        heli.hoverTimerSec = 2.0F;
     } else {
         heli.pos.rx() += heli.dirX * step;
         heli.pos.ry() += heli.dirY * step;
@@ -112,15 +111,15 @@ void GameWorld::moveApproachingHelicopter(DropHelicopter &heli, float dt)
 void GameWorld::processHoveringHelicopter(DropHelicopter &heli, float dt)
 {
     // Задачи:
-    // 1. Удерживать вертолёт в точке 2 секунды
-    // 2. Высадить 3 десантников и перевести вертолёт в фазу отлёта
+    // 1. Удерживать вертолёт в точке Х секунд
+    // 2. Высадить Х десантников и перевести вертолёт в фазу отлёта
 
-    // 1. Отсчёт 2 секунд зависания
+    // 1. Отсчёт Х секунд зависания
     heli.hoverTimerSec -= dt;
     if (heli.hoverTimerSec > 0.0F)
         return;
 
-    // 2. Высадка 3 солдат и старт отлёта
+    // 2. Высадка Х солдат и старт отлёта
     spawnParatrooperSquad(heli.targetPos);
     heli.phase = DropHelicopter::Phase::Departing;
     heli.traveledAfterDrop = 0.0F;
@@ -208,14 +207,44 @@ void GameWorld::rebuildHelicoptersRenderData()
         if (h.phase != DropHelicopter::Phase::Departing) {
             float dist = static_cast<float>(
                 std::hypot(h.targetPos.x() - h.pos.x(), h.targetPos.y() - h.pos.y()));
-            int etaSec = (h.phase == DropHelicopter::Phase::Hovering)
-                             ? static_cast<int>(std::ceil(h.hoverTimerSec))
-                             : static_cast<int>(std::ceil((dist / 135.0F) + 2.0F));
+            int ArriveSec = 0;
+            if (h.phase == DropHelicopter::Phase::Hovering)
+                ArriveSec = std::ceil(h.hoverTimerSec);
+            else {
+                // Вычисление точного времени затраченного на путь
+                const float maxSpeed = 135.0F; // cruiseSpeed
+                const float minSpeed = 12.0F;  // minLandingSpeed
+                const float slowDist = 50.0F;  // дистанция начала торможения
+                float travelTime = 0.0F;
+                if (dist > slowDist) {
+                    // 1. Участок равномерного движения на максимальной скорости
+                    float travelTimeFast = (dist - slowDist) / maxSpeed;
+
+                    // 2. Участок плавного торможения от maxSpeed до minSpeed
+                    float travelTimeSlow = (slowDist / (maxSpeed - minSpeed))
+                                           * std::log(maxSpeed / minSpeed);
+
+                    travelTime = travelTimeFast + travelTimeSlow;
+                } else if (dist > 0.0F) {
+                    // Если дистанция изначально меньше 50м, вычисляем скорость в начальной точке
+                    float t = std::clamp(dist / slowDist, 0.0F, 1.0F);
+                    float startSpeed = minSpeed + (maxSpeed - minSpeed) * t;
+
+                    // Интеграл на отрезке от dist до 0 (при условии startSpeed > minSpeed)
+                    if (startSpeed > minSpeed) {
+                        travelTime = (dist / (startSpeed - minSpeed))
+                                     * std::log(startSpeed / minSpeed);
+                    } else {
+                        travelTime = dist / minSpeed;
+                    }
+                }
+                ArriveSec = static_cast<int>(std::ceil(travelTime + h.hoverTimerSec));
+            }
 
             QVariantMap zm;
             zm["x"] = h.targetPos.x();
             zm["y"] = h.targetPos.y();
-            zm["eta"] = std::max(1, etaSec);
+            zm["eta"] = ArriveSec;
             zones.append(zm);
         }
     }

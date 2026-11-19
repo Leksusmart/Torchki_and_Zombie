@@ -341,7 +341,7 @@ Window {
                     }
 
                     Text {
-                        text: "ОТРЯД ДЕСАНТА  " + modelData.eta + "с"
+                        text: "Активная высадка " + modelData.eta + "с"
                         color: "#90cdf4"
                         font.pixelSize: 10
                         font.bold: true

@@ -75,6 +75,7 @@ private: // функции
                               const std::vector<size_t> &zombieTargets,
                               bool &buildingsVisualDirty);
     void stepUnitMovement(Unit &u, float dt, std::vector<BuildingObject> &buildings);
+
     // AiSolder
     void updateSoldierBehavior(Unit &u,
                                float dt,
