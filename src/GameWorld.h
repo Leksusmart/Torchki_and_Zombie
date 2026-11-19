@@ -55,6 +55,9 @@ private: // функции
     bool moveDepartingHelicopter(DropHelicopter &heli, float dt);
     void spawnParatrooperSquad(QPointF dropPos);
     void rebuildHelicoptersRenderData();
+    void updateSelectedUnitInfo(bool logDebug = false);
+    QString buildingDisplayName(int buildingId) const;
+    QString unitStateDisplayName(const Unit &u) const;
 
     // Поведение юнитов (разбито из бывшего монолита peopleUpdateActions)
     void peopleUpdateActions(float dt,
@@ -149,6 +152,8 @@ private: // переменные
     int g_eliminatedCount = 0;
     int g_gridCols = 0;
     int g_gridRows = 0;
+    int g_nextUnitId = 1;
+    int g_selectedUnitId = -1;
 
     int g_speedMultiplier = 1;
     int g_selectedTool = 0;
@@ -175,6 +180,7 @@ private: // переменные
     QVariantList g_workplaceLabels;
     QVariantList g_equippedTools = {1, 2, 3}; // По умолчанию: Вакцина (1), Десант (2), Эвакуация (3)
 
+    QVariantMap g_selectedUnitInfo;
     QVariantMap g_selectedBuildingInfo;
 
     std::vector<DropHelicopter> g_helicopters;
@@ -196,6 +202,7 @@ private:
     // QML связи
     Q_OBJECT
     QML_ELEMENT
+    Q_PROPERTY(QVariantMap selectedUnitInfo READ selectedUnitInfo NOTIFY selectedUnitChanged)
     Q_PROPERTY(QVariantList helicopters READ helicopters NOTIFY helicoptersChanged)
     Q_PROPERTY(QVariantList dropZones READ dropZones NOTIFY helicoptersChanged)
     Q_PROPERTY(QVariantList equippedTools
@@ -254,8 +261,10 @@ public:
     /*Q_PROPERTY*/ int dayNumber() const { return g_dayNumber; }
     /*Q_PROPERTY*/ bool isNight() const;
     /*Q_PROPERTY*/ float nightDarkness() const;
+    /*Q_PROPERTY*/ QVariantMap selectedUnitInfo() const { return g_selectedUnitInfo; }
 
     // QML вызовы
+    Q_INVOKABLE bool selectUnitAt(float worldX, float worldY, float radius = 8.0f);
     Q_INVOKABLE void regenerateMap();
     Q_INVOKABLE void togglePause();
     Q_INVOKABLE void toggleSpeed();
@@ -266,6 +275,7 @@ public:
     Q_INVOKABLE void selectBuildingAt(float worldX, float worldY);
 signals:
     // QML свойства изменились
+    /*Q_PROPERTY*/ void selectedUnitChanged();
     /*Q_PROPERTY*/ void helicoptersChanged();
     /*Q_PROPERTY*/ void equippedToolsChanged();
     /*Q_PROPERTY*/ void evacuationsChanged();

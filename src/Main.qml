@@ -274,6 +274,55 @@ Window {
                 }
             }
 
+            // Информационная карточка (overlay) над выбранным жителем / солдатом / зомби
+            Rectangle {
+                id: unitInfoOverlay
+                visible: gameWorld.selectedUnitInfo.valid === true
+                width: unitInfoCol.implicitWidth + 14
+                height: unitInfoCol.implicitHeight + 10
+                color: "#ee141923"
+                border.color: "#f6ad55"
+                border.width: 1
+                radius: 4
+                z: 11
+
+                transformOrigin: Item.Bottom
+                scale: Math.min(2.0, Math.max(0.55, 0.9 / cameraContainer.scale))
+
+                x: (gameWorld.selectedUnitInfo.x || 0) - width * 0.5
+                y: (gameWorld.selectedUnitInfo.y || 0) - height - 10
+
+                Column {
+                    id: unitInfoCol
+                    anchors.centerIn: parent
+                    spacing: 2
+
+                    Text {
+                        text: (gameWorld.selectedUnitInfo.role || "") + " #" + (gameWorld.selectedUnitInfo.id || 0)
+                              + "  (HP: " + (gameWorld.selectedUnitInfo.hp || 0) + ")"
+                        color: "#f6ad55"
+                        font.pixelSize: 10
+                        font.bold: true
+                    }
+                    Text {
+                        text: "Статус: " + (gameWorld.selectedUnitInfo.state || "")
+                        color: "#e2e8f0"
+                        font.pixelSize: 9
+                    }
+                    Text {
+                        text: "Цель: " + (gameWorld.selectedUnitInfo.target || "Нет")
+                        color: "#68d391"
+                        font.pixelSize: 9
+                    }
+                    Text {
+                        text: "Локация: " + (gameWorld.selectedUnitInfo.inside || "Улица")
+                        color: "#a0aec0"
+                        font.pixelSize: 8
+                    }
+                }
+            }
+
+
             // Прицел радиуса 250м с автопривязкой (20м) при выборе инструмента Эвакуации
             Rectangle {
                 id: evacPreviewCircle
@@ -462,12 +511,18 @@ Window {
                                    }
 
                 onClicked: (mouse) => {
-                               if (gameWorld.selectedTool === 0) {
-                                   gameWorld.selectBuildingAt(mouse.x, mouse.y)
-                               } else {
-                                   gameWorld.useToolAt(mouse.x, mouse.y)
-                               }
-                           }
+                    if (gameWorld.selectedTool === 0) {
+                        let hitUnit = gameWorld.selectUnitAt(mouse.x, mouse.y, 7.0)
+                        if (hitUnit) {
+                            gameWorld.selectBuildingAt(-1000, -1000) // Скрываем оверлей здания
+                        } else {
+                            gameWorld.selectBuildingAt(mouse.x, mouse.y)
+                        }
+                    } else {
+                        gameWorld.useToolAt(mouse.x, mouse.y)
+                    }
+                }
+
 
             }
 

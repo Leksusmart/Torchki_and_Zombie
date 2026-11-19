@@ -17,7 +17,7 @@ private: // функции
     void fillGeometry(QSGGeometry *geometry, const std::vector<RenderQuad> &quads);
     void fillCircleGeometry(QSGGeometry *geometry,
                             const std::vector<RenderQuad> &circles,
-                            int segments = 7);
+                            int segments = 12);
 
 private: // переменные
     GameWorld *g_world = nullptr;

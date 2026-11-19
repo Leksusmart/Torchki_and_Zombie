@@ -251,6 +251,7 @@ struct BuildingObject
 
 struct Unit
 {
+    int id = -1;
     float x, y;
     float vx, vy;
     UnitType type;

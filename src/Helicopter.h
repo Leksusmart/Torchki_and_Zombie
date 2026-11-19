@@ -162,6 +162,7 @@ void GameWorld::spawnParatrooperSquad(QPointF dropPos)
                                : dropPos;
 
         Unit s;
+        s.id = g_nextUnitId++;
         s.x = static_cast<float>(validPos.x());
         s.y = static_cast<float>(validPos.y());
         s.vx = 0.0F;

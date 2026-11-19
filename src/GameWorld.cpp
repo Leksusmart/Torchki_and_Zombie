@@ -47,6 +47,8 @@ void GameWorld::startLevel(const LevelConfig &config)
     g_dayNumber = 1;
     g_lastTrackedHour = static_cast<int>(g_timeOfDayHours) % 24;
     g_selectedBuildingId = -1;
+    g_selectedUnitId = -1;
+    g_nextUnitId = 1;
     g_paused = true;
     g_helicopters.clear();
 
@@ -178,6 +180,7 @@ void GameWorld::spawnInitialUnits(int citizenCount)
         float uy = static_cast<double>(idx / w) + 0.5f;
         float angle = static_cast<double>(rng->generateDouble() * 6.28318);
         Unit u;
+        u.id = g_nextUnitId++;
         u.x = ux;
         u.y = uy;
         u.lastCheckPos = QPointF(ux, uy);
@@ -447,10 +450,11 @@ void GameWorld::tick()
             int bId = cell - 10;
             u.insideBuildingId = bId;
 
-            if (u.type == UnitType::Citizen || u.type == UnitType::Vaccinated) {
+            if (u.hp > 0) {
                 auto &b = buildings[bId];
                 b.currentOccupants++;
                 if ((b.type == BuildingType::Office || b.type == BuildingType::Factory)
+                    && u.type != UnitType::Zombie
                     && b.currentOccupants > b.hourlyMaxWorkers[currentHourIdx]) {
                     b.hourlyMaxWorkers[currentHourIdx] = b.currentOccupants;
                 }
@@ -651,6 +655,12 @@ void GameWorld::tick()
     if (g_selectedBuildingId != -1) {
         updateSelectedBuildingInfo();
         emit selectedBuildingChanged();
+    }
+
+    // Отладка по юнитам
+    if (g_selectedUnitId != -1) {
+        updateSelectedUnitInfo(false);
+        emit selectedUnitChanged();
     }
 
     emit unitsUpdated();
@@ -1024,16 +1034,25 @@ void GameWorld::updateZombieBehavior(Unit &u,
 
     // 3. Last known target
     if (u.hasLastKnownTarget) {
-        float dx = static_cast<float>(u.lastKnownTargetPos.x()) - u.x;
-        float dy = static_cast<float>(u.lastKnownTargetPos.y()) - u.y;
-        float d = std::hypot(dx, dy);
-        if (d < 4.0f) {
+        int lkx = std::clamp(static_cast<int>(u.lastKnownTargetPos.x()), 0, g_generator.width() - 1);
+        int lky = std::clamp(static_cast<int>(u.lastKnownTargetPos.y()),
+                             0,
+                             g_generator.height() - 1);
+        if (u.insideBuildingId == -1
+            && g_generator.walkGrid()[lky * g_generator.width() + lkx] >= 10) {
             u.hasLastKnownTarget = false;
         } else {
-            u.vx = (dx / d) * ZOMBIE_CHASE_SPEED;
-            u.vy = (dy / d) * ZOMBIE_CHASE_SPEED;
+            float dx = static_cast<float>(u.lastKnownTargetPos.x()) - u.x;
+            float dy = static_cast<float>(u.lastKnownTargetPos.y()) - u.y;
+            float d = std::hypot(dx, dy);
+            if (d < 4.0f) {
+                u.hasLastKnownTarget = false;
+            } else {
+                u.vx = (dx / d) * ZOMBIE_CHASE_SPEED;
+                u.vy = (dy / d) * ZOMBIE_CHASE_SPEED;
+                return;
+            }
         }
-        return;
     }
 
     // 4. Внутри здания без жертв — выходим
@@ -1302,6 +1321,194 @@ void GameWorld::selectBuildingAt(float worldX, float worldY)
         g_selectedBuildingId = foundId;
         updateSelectedBuildingInfo();
         emit selectedBuildingChanged();
+    }
+}
+
+QString GameWorld::buildingDisplayName(int buildingId) const
+{
+    const auto &buildings = g_generator.buildings();
+    if (buildingId < 0 || buildingId >= static_cast<int>(buildings.size()))
+        return "Нет";
+
+    const auto &b = buildings[buildingId];
+    QString base = "Жилой дом";
+    if (b.type == BuildingType::Office)
+        base = "Офис";
+    else if (b.type == BuildingType::Factory)
+        base = "Завод";
+
+    return QString("%1 #%2").arg(base).arg(b.id);
+}
+
+QString GameWorld::unitStateDisplayName(const Unit &u) const
+{
+    if (u.type == UnitType::Zombie)
+        return u.hasLastKnownTarget ? "Преследование (след)" : "Охота / Бродяжничество";
+
+    if (u.type == UnitType::Soldier) {
+        if (u.onEvacBridge)
+            return "Уход по мосту";
+        if (u.isRetreating)
+            return QString("Отступление к выходу");
+        return QString("Бой / Патруль (%1с)").arg(static_cast<int>(std::ceil(u.lifeTimerSec)));
+    }
+
+    if (u.panicTimerSec > 0.0F)
+        return "Паника!";
+
+    switch (u.state) {
+    case UnitState::GoingToWork:
+        return "Идёт на работу";
+    case UnitState::Working:
+        return "На работе";
+    case UnitState::GoingHome:
+        return "Идёт домой";
+    case UnitState::AtHome:
+        return "Дома";
+    case UnitState::Evacuating:
+        return "Эвакуация";
+    case UnitState::PanicEvacuating:
+        return "Паническая эвакуация";
+    case UnitState::Walking:
+    default:
+        return "Прогулка";
+    }
+}
+
+bool GameWorld::selectUnitAt(float worldX, float worldY, float radius)
+{
+    // Задачи:
+    // 1. Найти ближайшего живого юнита в радиусе клика
+    // 2. Сохранить его ID, обновить оверлей и вывести полную отладку в qDebug()
+
+    int foundId = -1;
+    float bestDistSq = radius * radius;
+
+    for (const auto &u : g_units) {
+        if (u.hp <= 0)
+            continue;
+        float dx = u.x - worldX;
+        float dy = u.y - worldY;
+        float dSq = dx * dx + dy * dy;
+        if (dSq <= bestDistSq) {
+            bestDistSq = dSq;
+            foundId = u.id;
+        }
+    }
+
+    if (g_selectedUnitId != foundId) {
+        g_selectedUnitId = foundId;
+    }
+
+    updateSelectedUnitInfo(true);
+    emit selectedUnitChanged();
+    return (foundId != -1);
+}
+
+void GameWorld::updateSelectedUnitInfo(bool logDebug)
+{
+    // Задачи:
+    // 1. Найти выбранного юнита по g_selectedUnitId
+    // 2. Заполнить QVariantMap для оверлея над юнитом в QML
+    // 3. Вывести подробные координаты (юнит, целевое здание, waypoints) в qDebug()
+
+    QVariantMap info;
+    const Unit *found = nullptr;
+    for (const auto &u : g_units) {
+        if (u.id == g_selectedUnitId && u.hp > 0) {
+            found = &u;
+            break;
+        }
+    }
+
+    if (!found) {
+        g_selectedUnitId = -1;
+        info["valid"] = false;
+        g_selectedUnitInfo = info;
+        return;
+    }
+
+    QString roleName = "Житель";
+    if (found->type == UnitType::Vaccinated)
+        roleName = "Вакцинированный";
+    else if (found->type == UnitType::Zombie)
+        roleName = "Зомби";
+    else if (found->type == UnitType::Soldier)
+        roleName = "Солдат";
+    else if (found->isInfected)
+        roleName = "Инфицирован";
+
+    QString targetName = "Нет";
+    QString targetCoordsStr = "нет";
+    const auto &buildings = g_generator.buildings();
+    const auto &nodes = g_generator.nodes();
+
+    if (found->type == UnitType::Soldier && found->isRetreating) {
+        if (found->targetBuildingId >= 0
+            && found->targetBuildingId < static_cast<int>(nodes.size())) {
+            const auto &node = nodes[found->targetBuildingId];
+            targetName = node.evacName.isEmpty() ? QString("Выход #%1").arg(node.id)
+                                                 : node.evacName;
+            targetCoordsStr = QString("(%1, %2)")
+                                  .arg(node.pos.x(), 0, 'f', 1)
+                                  .arg(node.pos.y(), 0, 'f', 1);
+        }
+    } else if (found->state == UnitState::Evacuating || found->state == UnitState::PanicEvacuating) {
+        if (found->targetBuildingId >= 0
+            && found->targetBuildingId < static_cast<int>(nodes.size())) {
+            const auto &node = nodes[found->targetBuildingId];
+            targetName = node.evacName.isEmpty() ? QString("Эвакуация #%1").arg(node.id)
+                                                 : node.evacName;
+            targetCoordsStr = QString("(%1, %2)")
+                                  .arg(node.pos.x(), 0, 'f', 1)
+                                  .arg(node.pos.y(), 0, 'f', 1);
+        }
+    } else if (found->targetBuildingId >= 0
+               && found->targetBuildingId < static_cast<int>(buildings.size())) {
+        const auto &tb = buildings[found->targetBuildingId];
+        targetName = buildingDisplayName(tb.id);
+        targetCoordsStr = QString("центр=(%1, %2), дверь=(%3, %4)")
+                              .arg(tb.cx, 0, 'f', 1)
+                              .arg(tb.cy, 0, 'f', 1)
+                              .arg(tb.doorCenter.x(), 0, 'f', 1)
+                              .arg(tb.doorCenter.y(), 0, 'f', 1);
+    }
+
+    QString insideName = (found->insideBuildingId != -1)
+                             ? buildingDisplayName(found->insideBuildingId)
+                             : "Улица";
+
+    info["valid"] = true;
+    info["id"] = found->id;
+    info["role"] = roleName;
+    info["state"] = unitStateDisplayName(*found);
+    info["target"] = targetName;
+    info["inside"] = insideName;
+    info["hp"] = found->hp;
+    info["x"] = found->x;
+    info["y"] = found->y;
+    g_selectedUnitInfo = info;
+
+    if (logDebug) {
+        QStringList wpList;
+        for (size_t i = 0; i < found->waypoints.size(); ++i) {
+            wpList << QString("[%1: %2, %3]")
+                          .arg(i)
+                          .arg(found->waypoints[i].x(), 0, 'f', 1)
+                          .arg(found->waypoints[i].y(), 0, 'f', 1);
+        }
+
+        qDebug().noquote() << QString("=== UNIT DEBUG #%1 (%2) ===").arg(found->id).arg(roleName)
+                           << "\n  Pos (px):"
+                           << QString("(%1, %2)").arg(found->x, 0, 'f', 2).arg(found->y, 0, 'f', 2)
+                           << "| Vel:"
+                           << QString("(%1, %2)").arg(found->vx, 0, 'f', 2).arg(found->vy, 0, 'f', 2)
+                           << "\n  State:" << unitStateDisplayName(*found) << "| HP:" << found->hp
+                           << "| Inside:" << insideName
+                           << QString("(id=%1)").arg(found->insideBuildingId)
+                           << "\n  Target:" << targetName << "|" << targetCoordsStr
+                           << "\n  Waypoints (" << found->waypoints.size()
+                           << "):" << (wpList.isEmpty() ? "пусто" : wpList.join(" -> "));
     }
 }
 
