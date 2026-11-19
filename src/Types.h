@@ -54,6 +54,22 @@ struct ActiveEvacuation
     std::vector<QPointF> passengerOffsets; // Локальные координаты людей в круге 15м
 };
 
+struct DropHelicopter
+{
+    enum class Phase : uint8_t { Approaching = 0, Hovering = 1, Departing = 2 };
+
+    QPointF spawnPos;
+    QPointF targetPos;
+    QPointF pos;
+    float dirX = 0.0F;
+    float dirY = 0.0F;
+    float angleRad = 0.0F;
+    float rotorAngleRad = 0.0F;
+    float hoverTimerSec = 2.0F;
+    float traveledAfterDrop = 0.0F;
+    Phase phase = Phase::Approaching;
+};
+
 struct OutbreakEvent
 {
     float triggerTimeSec = 2.0f;
@@ -257,4 +273,9 @@ struct Unit
     float fireDamageCooldownSec = 0.0F; // Перезарядка урона от огня (0.5 сек)
     float stuckTimerSec = 0.0F;
     QPointF lastCheckPos;
+
+    float lifeTimerSec = 0.0F; // Таймер службы десантника (90 сек)
+    bool isRetreating = false; // True, когда 90 сек истекли и солдат идёт на эвакуацию
+    QPointF evacBridgeEnd;     // Финишная точка моста для одиночного ухода солдата
+    bool onEvacBridge = false; // True, когда солдат добежал до выхода и идёт по мосту
 };

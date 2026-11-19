@@ -4,10 +4,12 @@
 #include <algorithm>
 #include <cmath>
 
-#include "AI.h"
+#include "Ai.h"
+#include "AiSolder.h"
 #include "Effects.h"
 #include "Evacuation.h"
 #include "GameWorld.h"
+#include "Helicopter.h"
 #include "Navigation.h"
 
 GameWorld::GameWorld(QObject *parent)
@@ -45,6 +47,8 @@ void GameWorld::startLevel(const LevelConfig &config)
     g_dayNumber = 1;
     g_lastTrackedHour = static_cast<int>(g_timeOfDayHours) % 24;
     g_selectedBuildingId = -1;
+    g_paused = true;
+    g_helicopters.clear();
 
     // 3. Карта и граф
     g_generator.generateFromLevel(g_currentLevel);
@@ -62,13 +66,16 @@ void GameWorld::startLevel(const LevelConfig &config)
     rebuildWorkplaceLabels();
     rebuildEvacPoints();
     updateSelectedBuildingInfo();
+    rebuildHelicoptersRenderData();
 
+    emit helicoptersChanged();
     emit selectedBuildingChanged();
     emit evacuationsChanged();
     emit mapUpdated();
     emit unitsUpdated();
     emit statsChanged();
     emit timeChanged();
+    emit stateChanged();
 }
 
 void GameWorld::buildBuildingsGeometry()
@@ -594,6 +601,7 @@ void GameWorld::tick()
         emit statsChanged();
     }
     updateEffects(dt);
+    updateHelicopters(dt);
     updateEvacuations(dt);
     // Постоянный призыв на эвакуацию всех жителей (на улице и внутри зданий), оказавшихся в радиусе 100м
     for (const auto &ev : g_evacs) {
@@ -673,7 +681,8 @@ void GameWorld::peopleUpdateActions(float dt,
         }
 
         // 2. Общая физика шага
-        stepUnitMovement(u, dt, buildings);
+        if (u.onEvacBridge == false) // Если не эвакуируется
+            stepUnitMovement(u, dt, buildings);
     }
 }
 
@@ -880,138 +889,6 @@ void GameWorld::updateCitizenBehavior(Unit &u,
     }
 }
 
-void GameWorld::updateSoldierBehavior(Unit &u,
-                                      float dt,
-                                      std::vector<BuildingObject> &buildings,
-                                      const std::vector<size_t> &activeZombies)
-{
-    // Задачи:
-    // 1. Найти ближайшего видимого зомби и атаковать / держать дистанцию
-    // 2. Иначе — следовать waypoints / lastKnownTarget / патруль / вход в здание
-
-    auto *rng = QRandomGenerator::global();
-    (void)dt;
-
-    int bestZ = -1;
-    float bestDistSq = 85.0f * 85.0f;
-
-    for (size_t zIdx : activeZombies) {
-        const auto &z = g_units[zIdx];
-        if (z.hp <= 0)
-            continue;
-
-        bool sameBuilding = (u.insideBuildingId != -1 && u.insideBuildingId == z.insideBuildingId);
-        bool canSee = sameBuilding
-                      || (u.insideBuildingId == -1 && z.insideBuildingId == -1
-                          && hasLineOfSight(u.x, u.y, z.x, z.y));
-        if (!canSee)
-            continue;
-
-        float dx = z.x - u.x;
-        float dy = z.y - u.y;
-        float dSq = dx * dx + dy * dy;
-        if (dSq < bestDistSq) {
-            bestDistSq = dSq;
-            bestZ = static_cast<int>(zIdx);
-        }
-    }
-
-    // 1. Есть цель
-    if (bestZ != -1) {
-        u.waypoints.clear();
-        float zx = g_units[bestZ].x;
-        float zy = g_units[bestZ].y;
-        u.hasLastKnownTarget = true;
-        u.lastKnownTargetPos = QPointF(zx, zy);
-
-        float dx = zx - u.x;
-        float dy = zy - u.y;
-        float d = std::sqrt(bestDistSq);
-
-        if (d <= 35.0f && u.attackCooldownSec <= 0.0f) {
-            u.attackCooldownSec = 1.0f;
-            spawnBulletTracer(u.x, u.y, zx, zy);
-            g_units[bestZ].hp -= 1;
-            if (g_units[bestZ].hp <= 0) {
-                spawnBurstParticles(zx, zy, 8, 255, 60, 60);
-                g_eliminatedCount++;
-                g_budget += 5;
-                u.hasLastKnownTarget = false;
-            }
-        }
-
-        float maxRange = (u.insideBuildingId != -1) ? 5.0f : 11.5f;
-        float minRange = (u.insideBuildingId != -1) ? 2.5f : 9.5f;
-        if (d > maxRange) {
-            u.vx = (dx / d) * ZOMBIE_CHASE_SPEED;
-            u.vy = (dy / d) * ZOMBIE_CHASE_SPEED;
-        } else if (d < minRange && d > 0.1f) {
-            u.vx = -(dx / d) * ZOMBIE_CHASE_SPEED;
-            u.vy = -(dy / d) * ZOMBIE_CHASE_SPEED;
-        } else {
-            u.vx = 0.0f;
-            u.vy = 0.0f;
-        }
-        return;
-    }
-
-    // 2. Нет видимой цели — waypoints / last known / патруль
-    if (!u.waypoints.empty()) {
-        QPointF target = u.waypoints.front();
-        float dx = static_cast<float>(target.x()) - u.x;
-        float dy = static_cast<float>(target.y()) - u.y;
-        float dist = std::hypot(dx, dy);
-        if (dist < 1.5f) {
-            u.waypoints.erase(u.waypoints.begin());
-        } else {
-            u.vx = (dx / dist) * ZOMBIE_CHASE_SPEED;
-            u.vy = (dy / dist) * ZOMBIE_CHASE_SPEED;
-        }
-        return;
-    }
-
-    if (u.hasLastKnownTarget) {
-        float dx = static_cast<float>(u.lastKnownTargetPos.x()) - u.x;
-        float dy = static_cast<float>(u.lastKnownTargetPos.y()) - u.y;
-        float d = std::hypot(dx, dy);
-        if (d < 4.0f) {
-            u.hasLastKnownTarget = false;
-        } else {
-            u.vx = (dx / d) * ZOMBIE_CHASE_SPEED;
-            u.vy = (dy / d) * ZOMBIE_CHASE_SPEED;
-        }
-        return;
-    }
-
-    // Выход из пустого здания или случайный патруль / заход в здание
-    if (u.insideBuildingId != -1 && u.insideBuildingId < static_cast<int>(buildings.size())) {
-        const auto &b = buildings[u.insideBuildingId];
-        for (int p = static_cast<int>(b.pathFromRoad.size()) - 1; p >= 0; --p)
-            u.waypoints.push_back(b.pathFromRoad[p]);
-        return;
-    }
-
-    if (rng->bounded(100) < 6) {
-        for (const auto &b : buildings) {
-            if (b.health > 0 && !b.isBurning && !b.isBurnedOut && !b.pathFromRoad.empty()) {
-                float d = std::hypot(b.cx - u.x, b.cy - u.y);
-                if (d < 45.0f
-                    && hasLineOfSight(u.x, u.y,
-                                      static_cast<float>(b.doorCenter.x()),
-                                      static_cast<float>(b.doorCenter.y()))) {
-                    u.waypoints = b.pathFromRoad;
-                    u.waypoints.push_back(QPointF(b.cx, b.cy));
-                    return;
-                }
-            }
-        }
-    }
-
-    float angle = static_cast<float>(rng->generateDouble() * 6.28318);
-    u.vx = std::cos(angle) * ZOMBIE_CHASE_SPEED;
-    u.vy = std::sin(angle) * ZOMBIE_CHASE_SPEED;
-}
-
 void GameWorld::updateZombieBehavior(Unit &u,
                                      float dt,
                                      std::vector<BuildingObject> &buildings,
@@ -1192,7 +1069,7 @@ void GameWorld::stepUnitMovement(Unit &u,
     // Задачи:
     // 1. Урон/избегание огня
     // 2. Отталкивание от бордюров
-    // 3. Замедление внутри зданий (исправлен баг: было || вместо &&)
+    // 3. Замедление внутри зданий
     // 4. Шаг перемещения со скольжением вдоль стен
     // 5. Анти-застревание при движении к зданию
 
@@ -1207,7 +1084,7 @@ void GameWorld::stepUnitMovement(Unit &u,
 
     // 3. Замедление внутри здания
     if (u.insideBuildingId != -1) {
-        if (u.state != UnitState::AtHome || u.state != UnitState::Working) {
+        if (u.state == UnitState::AtHome || u.state == UnitState::Working) {
             float speedFactor = g_generator.level.speedInBuildingPercent / 100.0f;
             u.vx *= speedFactor;
             u.vy *= speedFactor;
@@ -1303,10 +1180,12 @@ void GameWorld::rebuildUnitRenderData()
             b = 120; // Зелёный — зомби
             size = 2.4f;
         } else if (u.type == UnitType::Soldier) {
-            r = 80;
-            g = 180;
-            b = 255; // Синий — солдат
-            size = 4.0f;
+            g_unitGeometry
+                .push_back({u.x, u.y, 4.4f, 4.4f, 0.0f, 255, 255, 255, 255}); // Белая окантовка
+            r = 65;
+            g = 145;
+            b = 255; // Ярко-синий солдат
+            size = 3.0f;
         } else if (u.isInfected) {
             r = 255;
             g = 175;
@@ -1413,6 +1292,17 @@ void GameWorld::updateSelectedBuildingInfo()
 
     g_selectedBuildingInfo = info;
 }
+/*Свойство для QML*/ void GameWorld::setEquippedTools(const QVariantList &tools)
+{
+    if (g_equippedTools != tools) {
+        g_equippedTools = tools;
+        // Если текущий выбранный инструмент убрали из слотов — сбрасываем выбор
+        if (!g_equippedTools.contains(g_selectedTool)) {
+            setSelectedTool(0);
+        }
+        emit equippedToolsChanged();
+    }
+}
 
 /*Вызывается из QML*/ void GameWorld::useToolAt(float worldX, float worldY)
 {
@@ -1442,28 +1332,7 @@ void GameWorld::updateSelectedBuildingInfo()
         if (dropPos.x() < 0.0f)
             return;
         g_budget -= 200;
-        auto *rng = QRandomGenerator::global();
-        for (int i = 0; i < 5; ++i) {
-            float angle = static_cast<double>(rng->generateDouble() * 6.28318);
-            Unit s;
-            s.x = static_cast<int>(dropPos.x());
-            s.y = static_cast<int>(dropPos.y());
-            s.vx = std::cos(angle) * ZOMBIE_CHASE_SPEED;
-            s.vy = std::sin(angle) * ZOMBIE_CHASE_SPEED;
-            s.type = UnitType::Soldier;
-            s.hp = 3; // Здоровье солдата = 3
-            s.laneOffset = static_cast<float>(
-                (rng->generateDouble() - 0.5)
-                * 0.75); // Случайная полоса в пределах 75% ширины дороги (-0.375 .. +0.375)
-            g_units.push_back(s);
-        }
-        float dx = static_cast<float>(dropPos.x());
-        float dy = static_cast<float>(dropPos.y());
-        emit pulseWaveTriggered(dx, dy, 22.0f, "#48bb78");
-        spawnBurstParticles(dx, dy, 12, 120, 255, 160);
-
-        rebuildUnitRenderData();
-        emit unitsUpdated();
+        callDropHelicopter(static_cast<float>(dropPos.x()), static_cast<float>(dropPos.y()));
         emit statsChanged();
     } else if (g_selectedTool == 3 && g_budget >= 75) {
         QVariantMap snap = snapEvacPoint(worldX, worldY, 20.0f);

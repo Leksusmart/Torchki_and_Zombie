@@ -48,6 +48,14 @@ private: // функции
     void rebuildBuildingOverlays();
     float roadWidth() const { return g_generator.roadWidth(); }
     void updateSelectedBuildingInfo();
+    void callDropHelicopter(float targetX, float targetY);
+    void updateHelicopters(float dt);
+    void moveApproachingHelicopter(DropHelicopter &heli, float dt);
+    void processHoveringHelicopter(DropHelicopter &heli, float dt);
+    bool moveDepartingHelicopter(DropHelicopter &heli, float dt);
+    void spawnParatrooperSquad(QPointF dropPos);
+    void rebuildHelicoptersRenderData();
+
     // Поведение юнитов (разбито из бывшего монолита peopleUpdateActions)
     void peopleUpdateActions(float dt,
                              std::vector<BuildingObject> &buildings,
@@ -61,18 +69,30 @@ private: // функции
                                std::vector<BuildingObject> &buildings,
                                const std::vector<size_t> &activeZombies,
                                const std::vector<size_t> &panickingOutdoors);
-    void updateSoldierBehavior(Unit &u,
-                               float dt,
-                               std::vector<BuildingObject> &buildings,
-                               const std::vector<size_t> &activeZombies);
     void updateZombieBehavior(Unit &u,
                               float dt,
                               std::vector<BuildingObject> &buildings,
                               const std::vector<size_t> &zombieTargets,
                               bool &buildingsVisualDirty);
     void stepUnitMovement(Unit &u, float dt, std::vector<BuildingObject> &buildings);
+    // AiSolder
+    void updateSoldierBehavior(Unit &u,
+                               float dt,
+                               std::vector<BuildingObject> &buildings,
+                               const std::vector<size_t> &activeZombies);
+    bool updateSoldierEvacuation(Unit &u, float dt, const std::vector<BuildingObject> &buildings);
+    int findSoldierFireTarget(const Unit &u, const std::vector<size_t> &activeZombies) const;
+    void fireAtTarget(Unit &soldier, size_t targetIdx);
+    void adjustSoldierCombatPosition(Unit &u, float targetX, float targetY, float dist);
+    int findSoldierHuntTarget(const Unit &u, const std::vector<size_t> &activeZombies) const;
+    void routeSoldierToTarget(Unit &u,
+                              float targetX,
+                              float targetY,
+                              const std::vector<BuildingObject> &buildings);
+    bool followSoldierWaypoints(Unit &u);
+    void patrolSoldier(Unit &u, const std::vector<BuildingObject> &buildings);
 
-    // AI.h
+    // Ai.h
     void updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObject> &buildings);
     void infectUnit(Unit &u, bool immediateZombie = false);
     void applyWallRepulsion(Unit &u, float dt);
@@ -140,13 +160,17 @@ private: // переменные
                                                 * 1.15F; // 115% от скорости бега жителя (21 * 1.15)
     static constexpr double TAX_PER_WORKER_SEC = 0.005F;
 
+    QVariantList g_helicoptersList;
+    QVariantList g_dropZonesList;
     QVariantList g_activeEvacuationsList;
     QVariantList g_evacPoints;
     QVariantList g_burningLights;
     QVariantList g_workplaceLabels;
+    QVariantList g_equippedTools = {1, 2, 3}; // По умолчанию: Вакцина (1), Десант (2), Эвакуация (3)
 
     QVariantMap g_selectedBuildingInfo;
 
+    std::vector<DropHelicopter> g_helicopters;
     std::vector<std::vector<int>>
         g_nodeSpatialGrid; // Пространственная сетка узлов дорог для мгновенного поиска startNode
     std::vector<std::vector<float>>
@@ -165,6 +189,10 @@ private:
     // QML связи
     Q_OBJECT
     QML_ELEMENT
+    Q_PROPERTY(QVariantList helicopters READ helicopters NOTIFY helicoptersChanged)
+    Q_PROPERTY(QVariantList dropZones READ dropZones NOTIFY helicoptersChanged)
+    Q_PROPERTY(QVariantList equippedTools READ equippedTools WRITE setEquippedTools NOTIFY
+                   equippedToolsChanged)
     Q_PROPERTY(QVariantMap selectedBuildingInfo
                READ selectedBuildingInfo
                NOTIFY selectedBuildingChanged)
@@ -191,6 +219,10 @@ private:
 
 public:
     // QML свойства
+    /*Q_PROPERTY*/ QVariantList helicopters() const { return g_helicoptersList; }
+    /*Q_PROPERTY*/ QVariantList dropZones() const { return g_dropZonesList; }
+    /*Q_PROPERTY*/ QVariantList equippedTools() const { return g_equippedTools; }
+    /*Q_PROPERTY*/ void setEquippedTools(const QVariantList &tools);
     /*Q_PROPERTY*/ QVariantMap selectedBuildingInfo() const { return g_selectedBuildingInfo; }
     /*Q_PROPERTY*/ QVariantList activeEvacuations() const { return g_activeEvacuationsList; }
     /*Q_PROPERTY*/ int evacuatedTotalCount() const { return g_evacuatedTotalCount; }
@@ -225,6 +257,8 @@ public:
     Q_INVOKABLE void selectBuildingAt(float worldX, float worldY);
 signals:
     // QML свойства изменились
+    /*Q_PROPERTY*/ void helicoptersChanged();
+    /*Q_PROPERTY*/ void equippedToolsChanged();
     /*Q_PROPERTY*/ void evacuationsChanged();
     /*Q_PROPERTY*/ void mapUpdated();
     /*Q_PROPERTY*/ void statsChanged();

@@ -321,6 +321,130 @@ Window {
                 }
             }
 
+            // Зоны посадки десанта (синий круг с таймером, как на 1-3 скриншотах)
+            Repeater {
+                model: gameWorld.dropZones
+                delegate: Item {
+                    x: modelData.x
+                    y: modelData.y
+                    z: 8
+
+                    Rectangle {
+                        width: 34
+                        height: 34
+                        radius: 17
+                        x: -17
+                        y: -17
+                        color: "#2263b3ed"
+                        border.color: "#63b3ed"
+                        border.width: 2
+                    }
+
+                    Text {
+                        text: "ОТРЯД ДЕСАНТА  " + modelData.eta + "с"
+                        color: "#90cdf4"
+                        font.pixelSize: 10
+                        font.bold: true
+                        style: Text.Outline
+                        styleColor: "#0f141d"
+                        transformOrigin: Item.Bottom
+                        scale: Math.min(2.0, Math.max(0.6, 0.85 / cameraContainer.scale))
+                        x: -width * 0.5
+                        y: -22 - height
+                    }
+                }
+            }
+
+            // Десантные вертолёты с тенью и вращающимися лопастями (как на 2-5 скриншотах)
+            Repeater {
+                model: gameWorld.helicopters
+                delegate: Item {
+                    x: modelData.x
+                    y: modelData.y
+                    z: 12
+
+                    // Тень вертолёта со смещением
+                    Item {
+                        x: 14
+                        y: 16
+                        rotation: modelData.angleDeg
+                        opacity: 0.32
+
+                        Rectangle {
+                            width: 26; height: 11; radius: 5
+                            x: -11; y: -5.5
+                            color: "#000000"
+                        }
+                        Rectangle {
+                            width: 14; height: 3
+                            x: -23; y: -1.5
+                            color: "#000000"
+                        }
+                        // Тень лопастей
+                        Item {
+                            x: 2; y: 0
+                            rotation: modelData.rotorDeg
+                            Rectangle { width: 42; height: 2.5; x: -21; y: -1.25; color: "#000000" }
+                            Rectangle { width: 2.5; height: 42; x: -1.25; y: -21; color: "#000000" }
+                        }
+                    }
+
+                    // Корпус вертолёта
+                    Item {
+                        rotation: modelData.angleDeg
+
+                        // Хвостовая балка и стабилизатор
+                        Rectangle {
+                            width: 14; height: 3.5
+                            x: -23; y: -1.75
+                            color: "#5f6f52"
+                            border.color: "#2d3748"
+                            border.width: 0.5
+                        }
+                        Rectangle {
+                            width: 3; height: 10
+                            x: -24; y: -5
+                            color: "#5f6f52"
+                        }
+
+                        // Основной фюзеляж
+                        Rectangle {
+                            width: 26; height: 11; radius: 5.5
+                            x: -11; y: -5.5
+                            color: "#78866b"
+                            border.color: "#2d3748"
+                            border.width: 1
+                        }
+
+                        // Кабина пилота (стекло спереди)
+                        Rectangle {
+                            width: 8; height: 8; radius: 4
+                            x: 5; y: -4
+                            color: "#90cdf4"
+                        }
+
+                        // Полупрозрачный диск от вращения винта + 4 лопасти
+                        Rectangle {
+                            width: 44; height: 44; radius: 22
+                            x: 2 - 22; y: -22
+                            color: "#18ffffff"
+                            border.color: "#33ffffff"
+                            border.width: 0.8
+
+                            Item {
+                                anchors.centerIn: parent
+                                rotation: modelData.rotorDeg
+
+                                Rectangle { width: 42; height: 2.5; x: -21; y: -1.25; color: "#2d3748" }
+                                Rectangle { width: 2.5; height: 42; x: -1.25; y: -21; color: "#2d3748" }
+                                Rectangle { width: 4; height: 4; radius: 2; x: -2; y: -2; color: "#1a202c" }
+                            }
+                        }
+                    }
+                }
+            }
+
+
             MouseArea {
                 id: mapMouseArea
                 anchors.fill: parent
@@ -329,21 +453,21 @@ Window {
                 property bool snappedEvac: false
 
                 onPositionChanged: (mouse) => {
-                    if (gameWorld.selectedTool === 3) {
-                        let snap = gameWorld.snapEvacPoint(mouse.x, mouse.y, 20.0)
-                        snappedEvac = snap.snapped
-                        evacPreviewCircle.x = snap.x - 250
-                        evacPreviewCircle.y = snap.y - 250
-                    }
-                }
+                                       if (gameWorld.selectedTool === 3) {
+                                           let snap = gameWorld.snapEvacPoint(mouse.x, mouse.y, 20.0)
+                                           snappedEvac = snap.snapped
+                                           evacPreviewCircle.x = snap.x - 250
+                                           evacPreviewCircle.y = snap.y - 250
+                                       }
+                                   }
 
                 onClicked: (mouse) => {
-                    if (gameWorld.selectedTool === 0) {
-                        gameWorld.selectBuildingAt(mouse.x, mouse.y)
-                    } else {
-                        gameWorld.useToolAt(mouse.x, mouse.y)
-                    }
-                }
+                               if (gameWorld.selectedTool === 0) {
+                                   gameWorld.selectBuildingAt(mouse.x, mouse.y)
+                               } else {
+                                   gameWorld.useToolAt(mouse.x, mouse.y)
+                               }
+                           }
 
             }
 
@@ -456,7 +580,7 @@ Window {
 
             Text { text: "Здоровые: " + gameWorld.citizensCount; color: "#e2e8f0"; font.pixelSize: 14; font.bold: true }
             Text { text: "Зомби: " + gameWorld.zombiesCount; color: "#fc8181"; font.pixelSize: 14; font.bold: true }
-            Text { text: "Солдаты: " + gameWorld.eliminatedCount; color: "#68d391"; font.pixelSize: 14; font.bold: true }
+            Text { text: "Убито: " + gameWorld.eliminatedCount; color: "#68d391"; font.pixelSize: 14; font.bold: true }
 
             Item { Layout.fillWidth: true }
 
@@ -500,8 +624,12 @@ Window {
             Button {
                 text: "Заново"
                 palette.buttonText: "black"
-                onClicked: gameWorld.regenerateMap()
+                onClicked: {
+                    gameWorld.regenerateMap()
+                    toolkitMenu.visible = true
+                }
             }
+
         }
     }
 
@@ -523,14 +651,14 @@ Window {
             spacing: 8
 
             Repeater {
-                            model: [
-                                { label: "Житель", clr: "#f0f0f0" },
-                                { label: "В панике", clr: "#ff7373" },
-                                { label: "Инфицирован", clr: "#ffaf2d" },
-                                { label: "Вакцинированный", clr: "#50b4ff" },
-                                { label: "Зомби", clr: "#ff3232" },
-                                { label: "Солдаты", clr: "#46e678" }
-                            ]
+                model: [
+                    { label: "Житель", clr: "#f0f0f0" },
+                    { label: "В панике", clr: "#ff7373" },
+                    { label: "Инфицирован", clr: "#ffaf2d" },
+                    { label: "Вакцинированный", clr: "#50b4ff" },
+                    { label: "Зомби", clr: "#46e678" },
+                    { label: "Солдаты", clr: "#50b4ff" }
+                ]
                 delegate: Row {
                     spacing: 8
                     Rectangle { width: 10; height: 10; color: modelData.clr; anchors.verticalCenter: parent.verticalCenter }
@@ -550,11 +678,12 @@ Window {
         Repeater {
             model: [
                 { id: 1, title: "Вакцинирующая капсула", desc: "Лечит в радиусе", cost: "90 ₽", accent: "#4299e1" },
-                { id: 2, title: "Отряд десанта", desc: "Высадка 5 солдат на точку", cost: "200 ₽", accent: "#48bb78" },
+                { id: 2, title: "Отряд десанта", desc: "Высадка солдат в точку", cost: "200 ₽", accent: "#48bb78" },
                 { id: 3, title: "Точка эвакуации", desc: "Инициация эвакуации", cost: "75 ₽", accent: "#38b2ac" }
             ]
 
             delegate: Rectangle {
+                visible: gameWorld.equippedTools.indexOf(modelData.id) !== -1
                 width: 190
                 height: 82
                 color: gameWorld.selectedTool === modelData.id ? "#2b3648" : "#dd18202c"
@@ -581,4 +710,10 @@ Window {
             }
         }
     }
+    ToolkitMenu {
+        id: toolkitMenu
+        world: gameWorld
+        visible: true // Открывается сразу при запуске и при рестарте
+    }
+
 }
