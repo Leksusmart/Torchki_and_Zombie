@@ -81,7 +81,13 @@ private: // функции
                                float dt,
                                std::vector<BuildingObject> &buildings,
                                const std::vector<size_t> &activeZombies);
-    bool updateSoldierEvacuation(Unit &u, float dt, const std::vector<BuildingObject> &buildings);
+    bool updateSoldierEvacuation(Unit &u,
+                                 float dt,
+                                 const std::vector<BuildingObject> &buildings,
+                                 const std::vector<size_t> &activeZombies);
+    bool moveSoldierOnEvacBridge(Unit &u, float dt);
+    int findSafestEvacExit(const Unit &u, const std::vector<size_t> &activeZombies) const;
+    void applySoldierEvacAvoidance(Unit &u, const std::vector<size_t> &activeZombies);
     int findSoldierFireTarget(const Unit &u, const std::vector<size_t> &activeZombies) const;
     void fireAtTarget(Unit &soldier, size_t targetIdx);
     void adjustSoldierCombatPosition(Unit &u, float targetX, float targetY, float dist);

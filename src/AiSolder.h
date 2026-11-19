@@ -3,6 +3,106 @@
 #include "GameWorld.h"
 #include <cmath>
 
+bool GameWorld::updateSoldierEvacuation(Unit &u,
+                                        float dt,
+                                        const std::vector<BuildingObject> &buildings,
+                                        const std::vector<size_t> &activeZombies)
+{
+    // Оркестратор отступления и эвакуации десантника:
+    // 1. Уменьшать таймер службы (90с) и перевести в режим отступления по его истечении
+    // 2. Провести солдата по мосту, если он уже достиг эвакуационного выхода
+    // 3. Стрелять по зомби и инфицированным, попавшим в радиус огня по пути
+    // 4. Выбрать безопасный эвакуационный выход (смена точки, если путь перекрыт зомби) и построить маршрут
+    // 5. Двигаться по маршруту с обходом видимых зомби и перейти на мост при достижении выхода
+
+    // 1. Отсчёт времени службы
+    if (!u.isRetreating) {
+        u.lifeTimerSec -= dt;
+        if (u.lifeTimerSec > 0.0F)
+            return false;
+
+        u.isRetreating = true;
+        u.targetBuildingId = -1;
+        u.waypoints.clear();
+    }
+
+    // 2. Движение по мосту (одиночный уход)
+    if (u.onEvacBridge)
+        return moveSoldierOnEvacBridge(u, dt);
+
+    // 3. Стрельба по врагам в радиусе огня на ходу
+    int fireTargetIdx = findSoldierFireTarget(u, activeZombies);
+    if (fireTargetIdx != -1) {
+        fireAtTarget(u, static_cast<size_t>(fireTargetIdx));
+    }
+
+    // 4. Выбор безопасного выхода и построение / смена маршрута
+    const auto &nodes = g_generator.nodes();
+    int bestEvacNode = findSafestEvacExit(u, activeZombies);
+    if (bestEvacNode == -1) {
+        u.hp = 0;
+        return true;
+    }
+
+    QPointF evacPos = nodes[bestEvacNode].pos;
+    if (u.waypoints.empty() || u.targetBuildingId != bestEvacNode) {
+        u.targetBuildingId = bestEvacNode;
+        u.waypoints = buildPathBetween(QPointF(u.x, u.y), evacPos);
+
+        if (u.waypoints.size() >= 2) {
+            float d01 = static_cast<float>(std::hypot(u.waypoints[1].x() - u.waypoints[0].x(),
+                                                      u.waypoints[1].y() - u.waypoints[0].y()));
+            float d1 = static_cast<float>(
+                std::hypot(u.waypoints[1].x() - u.x, u.waypoints[1].y() - u.y));
+            if (d1 < d01
+                && hasWalkableLineOfSight(u.x,
+                                          u.y,
+                                          static_cast<float>(u.waypoints[1].x()),
+                                          static_cast<float>(u.waypoints[1].y()))) {
+                u.waypoints.erase(u.waypoints.begin());
+            }
+        }
+
+        if (u.insideBuildingId >= 0 && u.insideBuildingId < static_cast<int>(buildings.size())) {
+            const auto &b = buildings[u.insideBuildingId];
+            std::vector<QPointF> exitPts;
+            for (int p = static_cast<int>(b.pathFromRoad.size()) - 1; p >= 0; --p)
+                exitPts.push_back(b.pathFromRoad[p]);
+            u.waypoints.insert(u.waypoints.begin(), exitPts.begin(), exitPts.end());
+        }
+    }
+
+    // 5. Проверка достижения выхода -> переход на мост, иначе движение с уклонением от зомби
+    float distToExit = static_cast<float>(std::hypot(evacPos.x() - u.x, evacPos.y() - u.y));
+    if (distToExit <= 5.0F) {
+        const auto &routes = g_generator.evacRoutes();
+        if (!routes.empty()) {
+            const EvacRoute *bestRoute = &routes[0];
+            float bestRouteDist = 1e9F;
+            for (const auto &r : routes) {
+                float d = static_cast<float>(
+                    std::hypot(r.startPos.x() - evacPos.x(), r.startPos.y() - evacPos.y()));
+                if (d < bestRouteDist) {
+                    bestRouteDist = d;
+                    bestRoute = &r;
+                }
+            }
+            u.onEvacBridge = true;
+            u.x = static_cast<float>(bestRoute->startPos.x());
+            u.y = static_cast<float>(bestRoute->startPos.y());
+            u.evacBridgeEnd = bestRoute->endPos;
+            u.waypoints.clear();
+        } else {
+            u.hp = 0;
+        }
+        return true;
+    }
+
+    followSoldierWaypoints(u);
+    applySoldierEvacAvoidance(u, activeZombies);
+    return true;
+}
+
 void GameWorld::updateSoldierBehavior(Unit &u,
                                       float dt,
                                       std::vector<BuildingObject> &buildings,
@@ -16,7 +116,7 @@ void GameWorld::updateSoldierBehavior(Unit &u,
     // 5. Если целей на карте нет — двигаться по текущим waypoints или патрулировать
 
     // 1. Проверка 90 секунд службы и эвакуация
-    if (updateSoldierEvacuation(u, dt, buildings))
+    if (updateSoldierEvacuation(u, dt, buildings, activeZombies))
         return;
 
     // 2. Поиск цели в радиусе выстрела (35м, сквозь тротуары, но не через стены зданий)
@@ -51,6 +151,144 @@ void GameWorld::updateSoldierBehavior(Unit &u,
         return;
 
     patrolSoldier(u, buildings);
+}
+
+bool GameWorld::moveSoldierOnEvacBridge(Unit &u, float dt)
+{
+    // Задачи:
+    // 1. Вести солдата по прямой от начала моста до конечной точки за картой
+    // 2. Удалить юнит при достижении конца моста
+
+    float dx = static_cast<float>(u.evacBridgeEnd.x()) - u.x;
+    float dy = static_cast<float>(u.evacBridgeEnd.y()) - u.y;
+    float dist = std::hypot(dx, dy);
+
+    // 1–2. Проверка конца пути и перемещение
+    if (dist < 4.0F) {
+        u.hp = 0;
+    } else {
+        const float bridgeSpeed = 32.0F;
+        u.vx = (dx / dist) * bridgeSpeed;
+        u.vy = (dy / dist) * bridgeSpeed;
+        u.x += u.vx * dt;
+        u.y += u.vy * dt;
+    }
+    return true;
+}
+
+int GameWorld::findSafestEvacExit(const Unit &u, const std::vector<size_t> &activeZombies) const
+{
+    // Задачи:
+    // 1. Оценить каждый эвакуационный выход по дистанции и наличию зомби в опасном коридоре к нему
+    // 2. Вернуть ID наиболее безопасного и близкого выхода (с гистерезисом для текущей точки)
+
+    const auto &nodes = g_generator.nodes();
+    int bestNode = -1;
+    float bestScore = 1e9F;
+
+    for (const auto &node : nodes) {
+        if (!node.isEvacExit)
+            continue;
+
+        float ex = static_cast<float>(node.pos.x());
+        float ey = static_cast<float>(node.pos.y());
+        float distToExit = std::hypot(ex - u.x, ey - u.y);
+        float threatPenalty = 0.0F;
+
+        // 1. Штрафуем выходы, у которых зомби стоят рядом с выходом или на пути к нему
+        for (size_t zIdx : activeZombies) {
+            const Unit &z = g_units[zIdx];
+            if (z.hp <= 0)
+                continue;
+
+            float dZombieExit = std::hypot(z.x - ex, z.y - ey);
+            if (dZombieExit < 45.0F) {
+                threatPenalty += (45.0F - dZombieExit) * 6.0F;
+            }
+
+            // Проверяем, не находится ли видимый зомби прямо в секторе движения к этому выходу
+            float dZombieSoldier = std::hypot(z.x - u.x, z.y - u.y);
+            if (dZombieSoldier < 55.0F && distToExit > 1.0F && dZombieSoldier > 0.1F
+                && hasLineOfSight(u.x, u.y, z.x, z.y)) {
+                float dot = ((ex - u.x) / distToExit) * ((z.x - u.x) / dZombieSoldier)
+                            + ((ey - u.y) / distToExit) * ((z.y - u.y) / dZombieSoldier);
+                if (dot > 0.5F) {
+                    threatPenalty += dot * (55.0F - dZombieSoldier) * 4.5F;
+                }
+            }
+        }
+
+        // 2. Небольшой бонус текущему выбранному выходу, чтобы солдат не метался при равных условиях
+        float hysteresis = (u.targetBuildingId == node.id) ? -25.0F : 0.0F;
+        float score = distToExit + threatPenalty + hysteresis;
+
+        if (score < bestScore) {
+            bestScore = score;
+            bestNode = node.id;
+        }
+    }
+
+    return bestNode;
+}
+
+void GameWorld::applySoldierEvacAvoidance(Unit &u, const std::vector<size_t> &activeZombies)
+{
+    // Задачи:
+    // 1. Вычислить вектор отталкивания и бокового обхода от видимых зомби на улице
+    // 2. Скорректировать скорость солдата, сохраняя приоритет движения к эвакуации
+
+    if (u.insideBuildingId != -1)
+        return;
+
+    float speed = std::hypot(u.vx, u.vy);
+    if (speed < 0.1F)
+        return;
+
+    float dirX = u.vx / speed;
+    float dirY = u.vy / speed;
+    float avoidX = 0.0F;
+    float avoidY = 0.0F;
+    bool hasThreat = false;
+
+    // 1. Суммируем отталкивание и боковой обход по касательной от близких зомби
+    for (size_t zIdx : activeZombies) {
+        const Unit &z = g_units[zIdx];
+        if (z.hp <= 0 || z.insideBuildingId != -1)
+            continue;
+
+        float dx = u.x - z.x;
+        float dy = u.y - z.y;
+        float dist = std::hypot(dx, dy);
+
+        if (dist <= 38.0F && dist > 0.1F && hasLineOfSight(u.x, u.y, z.x, z.y)) {
+            hasThreat = true;
+            float weight = (38.0F - dist) / 38.0F;
+            float awayX = dx / dist;
+            float awayY = dy / dist;
+
+            // Выбираем сторону обхода (влево или вправо от зомби), ближе к текущему курсу
+            float tangX = -awayY;
+            float tangY = awayX;
+            if (tangX * dirX + tangY * dirY < 0.0F) {
+                tangX = -tangX;
+                tangY = -tangY;
+            }
+
+            avoidX += (awayX * 1.1F + tangX * 0.9F) * weight;
+            avoidY += (awayY * 1.1F + tangY * 0.9F) * weight;
+        }
+    }
+
+    // 2. Смешиваем курс на эвакуацию с вектором обхода
+    if (hasThreat) {
+        float finalX = dirX * 1.15F + avoidX;
+        float finalY = dirY * 1.15F + avoidY;
+        float len = std::hypot(finalX, finalY);
+        if (len > 0.01F) {
+            u.vx = (finalX / len) * ZOMBIE_CHASE_SPEED;
+            u.vy = (finalY / len) * ZOMBIE_CHASE_SPEED;
+        }
+    }
 }
 
 int GameWorld::findSoldierFireTarget(const Unit &u, const std::vector<size_t> &activeZombies) const
@@ -198,122 +436,6 @@ void GameWorld::routeSoldierToTarget(Unit &u,
     }
 
     u.waypoints = std::move(newPath);
-}
-
-bool GameWorld::updateSoldierEvacuation(Unit &u,
-                                        float dt,
-                                        const std::vector<BuildingObject> &buildings)
-{
-    // Задачи:
-    // 1. Уменьшать таймер службы (90с) и перевести в режим отступления по его истечении
-    // 2. Проложить маршрут к ближайшему эвакуационному выходу
-    // 3. После достижения выхода — провести солдата по мосту в одиночку (без ожидания группы)
-
-    // 1. Отсчёт времени службы
-    if (!u.isRetreating) {
-        u.lifeTimerSec -= dt;
-        if (u.lifeTimerSec > 0.0F)
-            return false;
-
-        u.isRetreating = true;
-        u.waypoints.clear();
-    }
-
-    // 2. Движение по мосту после выхода за пределы города (одиночный конвой)
-    if (u.onEvacBridge) {
-        float dx = static_cast<float>(u.evacBridgeEnd.x()) - u.x;
-        float dy = static_cast<float>(u.evacBridgeEnd.y()) - u.y;
-        float dist = std::hypot(dx, dy);
-
-        if (dist < 4.0F) {
-            u.hp = 0; // Солдат успешно эвакуировался
-        } else {
-            const float bridgeSpeed = 32.0F;
-            u.vx = (dx / dist) * bridgeSpeed;
-            u.vy = (dy / dist) * bridgeSpeed;
-            u.x += u.vx * dt;
-            u.y += u.vy * dt;
-        }
-        return true;
-    }
-
-    // 3. Поиск ближайшего эвакуационного выхода и построение пути
-    const auto &nodes = g_generator.nodes();
-    int bestEvacNode = -1;
-    float bestDist = 1e9F;
-
-    for (const auto &node : nodes) {
-        if (!node.isEvacExit)
-            continue;
-        float d = static_cast<float>(std::hypot(node.pos.x() - u.x, node.pos.y() - u.y));
-        if (d < bestDist) {
-            bestDist = d;
-            bestEvacNode = node.id;
-        }
-    }
-
-    if (bestEvacNode == -1) {
-        u.hp = 0;
-        return true;
-    }
-
-    QPointF evacPos = nodes[bestEvacNode].pos;
-
-    if (u.waypoints.empty()) {
-        u.waypoints = buildPathBetween(QPointF(u.x, u.y), evacPos);
-        // Отбрасываем первый узел, если он позади нас по направлению к выходу
-        if (u.waypoints.size() >= 2) {
-            float d0 = static_cast<float>(
-                std::hypot(u.waypoints[0].x() - u.x, u.waypoints[0].y() - u.y));
-            float d01 = static_cast<float>(std::hypot(u.waypoints[1].x() - u.waypoints[0].x(),
-                                                      u.waypoints[1].y() - u.waypoints[0].y()));
-            float d1 = static_cast<float>(
-                std::hypot(u.waypoints[1].x() - u.x, u.waypoints[1].y() - u.y));
-            if (d1 < d01
-                && hasLineOfSight(u.x,
-                                  u.y,
-                                  static_cast<float>(u.waypoints[1].x()),
-                                  static_cast<float>(u.waypoints[1].y()))) {
-                u.waypoints.erase(u.waypoints.begin());
-            }
-        }
-        if (u.insideBuildingId >= 0 && u.insideBuildingId < static_cast<int>(buildings.size())) {
-            const auto &b = buildings[u.insideBuildingId];
-            std::vector<QPointF> exitPts;
-            for (int p = static_cast<int>(b.pathFromRoad.size()) - 1; p >= 0; --p)
-                exitPts.push_back(b.pathFromRoad[p]);
-            u.waypoints.insert(u.waypoints.begin(), exitPts.begin(), exitPts.end());
-        }
-    }
-
-    // Проверка достижения эвакуационного выхода -> переход на мост
-    float distToExit = static_cast<float>(std::hypot(evacPos.x() - u.x, evacPos.y() - u.y));
-    if (distToExit <= 5.0F) {
-        const auto &routes = g_generator.evacRoutes();
-        if (!routes.empty()) {
-            const EvacRoute *bestRoute = &routes[0];
-            float bestRouteDist = 1e9F;
-            for (const auto &r : routes) {
-                float d = static_cast<float>(
-                    std::hypot(r.startPos.x() - evacPos.x(), r.startPos.y() - evacPos.y()));
-                if (d < bestRouteDist) {
-                    bestRouteDist = d;
-                    bestRoute = &r;
-                }
-            }
-            u.onEvacBridge = true;
-            u.x = static_cast<float>(bestRoute->startPos.x());
-            u.y = static_cast<float>(bestRoute->startPos.y());
-            u.evacBridgeEnd = bestRoute->endPos;
-            u.waypoints.clear();
-        } else {
-            u.hp = 0;
-        }
-        return true;
-    }
-
-    followSoldierWaypoints(u);
-    return true;
 }
 
 void GameWorld::fireAtTarget(Unit &soldier, size_t targetIdx)
