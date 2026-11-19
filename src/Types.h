@@ -44,7 +44,6 @@ struct ActiveEvacuation
     QPointF evacPos;
     float timeLeftSec = 30.0f;
     int boardedCount = 0;
-    static constexpr int MAX_CAPACITY = 50;
     bool completed = false; // true когда набрано 50 чел или вышли 30 сек
 
     // Параметры конвоя на воде/мосту
@@ -109,7 +108,7 @@ struct LevelConfig
     int initialCitizens = 2000;
     double initialBudget = 300.0;
     float startHour = 8.0F;
-    float gameHoursPerSec = 0.6F; // 0.15F
+    float gameHoursPerSec = 0.15F; // 0.15F 1 день = 2,6 минут
     std::vector<OutbreakEvent> outbreaks;
 };
 
@@ -120,8 +119,13 @@ struct LevelDefinition
     QString mapPngPath = ":/Torchki_and_Zombie/levels/Level1.png";
     float roadWidthMeters = 13.0f;
     float roadWidthMetersToBuilding = 4.0F;
+
+    // Вместимость эвакуационной точки
+    int evac_capacity = 50;
+
     // Скорость в помещении
     int speedInBuildingPercent = 40;
+
     // Процент ночных смен
     int nightWorkPercent = 0;
 

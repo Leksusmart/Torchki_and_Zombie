@@ -928,16 +928,37 @@ void GameWorld::updateZombieBehavior(Unit &u,
 
     // 1. Есть жертва
     if (bestTarget != -1) {
-        u.waypoints.clear();
         float tx = g_units[bestTarget].x;
         float ty = g_units[bestTarget].y;
+
+        // Если зомби внутри здания, а жертва на улице — сначала выходим по тропинке наружу
+        if (u.insideBuildingId >= 0 && u.insideBuildingId < static_cast<int>(buildings.size())
+            && g_units[bestTarget].insideBuildingId != u.insideBuildingId) {
+            if (u.waypoints.empty()) {
+                const auto &b = buildings[u.insideBuildingId];
+                for (int p = static_cast<int>(b.pathFromRoad.size()) - 1; p >= 0; --p)
+                    u.waypoints.push_back(b.pathFromRoad[p]);
+            }
+            QPointF wp = u.waypoints.front();
+            float wdx = static_cast<float>(wp.x()) - u.x;
+            float wdy = static_cast<float>(wp.y()) - u.y;
+            float wdist = std::hypot(wdx, wdy);
+            if (wdist < 1.5f) {
+                u.waypoints.erase(u.waypoints.begin());
+            } else {
+                u.vx = (wdx / wdist) * ZOMBIE_CHASE_SPEED;
+                u.vy = (wdy / wdist) * ZOMBIE_CHASE_SPEED;
+            }
+            return;
+        }
         u.hasLastKnownTarget = true;
         u.lastKnownTargetPos = QPointF(tx, ty);
         float dx = tx - u.x;
         float dy = ty - u.y;
         float d = std::sqrt(bestDistSq);
 
-        if (d <= 3.5f) {
+        if (d <= 3.5f && hasWalkableLineOfSight(u.x, u.y, tx, ty)) {
+            u.waypoints.clear();
             if (u.attackCooldownSec <= 0.0f) {
                 u.attackCooldownSec = 0.5f;
                 Unit &victim = g_units[bestTarget];
@@ -948,9 +969,40 @@ void GameWorld::updateZombieBehavior(Unit &u,
                     u.hasLastKnownTarget = false;
                 }
             }
-        } else {
+        } else if (hasWalkableLineOfSight(u.x, u.y, tx, ty)) {
+            u.waypoints.clear();
             u.vx = (dx / d) * ZOMBIE_CHASE_SPEED;
             u.vy = (dy / d) * ZOMBIE_CHASE_SPEED;
+        } else {
+            // Цель видна через тротуар, но напрямую пройти нельзя — обходим по графу дорог
+            if (u.waypoints.empty()
+                || std::hypot(u.waypoints.back().x() - tx, u.waypoints.back().y() - ty) > 25.0f) {
+                u.waypoints = buildPathBetween(QPointF(u.x, u.y), QPointF(tx, ty));
+                if (u.waypoints.size() >= 2) {
+                    float segLen = static_cast<float>(
+                        std::hypot(u.waypoints[1].x() - u.waypoints[0].x(),
+                                   u.waypoints[1].y() - u.waypoints[0].y()));
+                    float distToSecond = static_cast<float>(
+                        std::hypot(u.waypoints[1].x() - u.x, u.waypoints[1].y() - u.y));
+                    if (distToSecond < segLen
+                        && hasWalkableLineOfSight(u.x, u.y, u.waypoints[1].x(), u.waypoints[1].y())) {
+                        u.waypoints.erase(u.waypoints.begin());
+                    }
+                }
+            }
+            if (!u.waypoints.empty()) {
+                QPointF wp = u.waypoints.front();
+                float wdx = static_cast<float>(wp.x()) - u.x;
+                float wdy = static_cast<float>(wp.y()) - u.y;
+                float wdist = std::hypot(wdx, wdy);
+                float reachR = (u.waypoints.size() > 1) ? (roadWidth() * 0.35f) : 2.0f;
+                if (wdist <= reachR) {
+                    u.waypoints.erase(u.waypoints.begin());
+                } else {
+                    u.vx = (wdx / wdist) * ZOMBIE_CHASE_SPEED;
+                    u.vy = (wdy / wdist) * ZOMBIE_CHASE_SPEED;
+                }
+            }
         }
         return;
     }

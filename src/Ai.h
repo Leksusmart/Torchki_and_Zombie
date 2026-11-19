@@ -117,7 +117,7 @@ void GameWorld::updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObj
             std::hypot(u.x - targetEvac->evacPos.x(), u.y - targetEvac->evacPos.y()));
         if (distToExit <= 5.0F) {
             if (!targetEvac->completed && !u.isInfected
-                && targetEvac->boardedCount < ActiveEvacuation::MAX_CAPACITY) {
+                && targetEvac->boardedCount < g_generator.level.evac_capacity) {
                 targetEvac->boardedCount++;
                 g_evacuatedTotalCount++;
                 g_budget += 3.0;
@@ -128,7 +128,7 @@ void GameWorld::updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObj
                     .push_back(QPointF(std::cos(rAngle) * rDist, std::sin(rAngle) * rDist));
 
                 u.hp = 0;
-                if (targetEvac->boardedCount >= ActiveEvacuation::MAX_CAPACITY) {
+                if (targetEvac->boardedCount >= g_generator.level.evac_capacity) {
                     targetEvac->completed = true;
                 }
                 emit statsChanged();

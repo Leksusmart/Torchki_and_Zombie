@@ -87,8 +87,7 @@ private: // функции
     void adjustSoldierCombatPosition(Unit &u, float targetX, float targetY, float dist);
     int findSoldierHuntTarget(const Unit &u, const std::vector<size_t> &activeZombies) const;
     void routeSoldierToTarget(Unit &u,
-                              float targetX,
-                              float targetY,
+                              const Unit &target,
                               const std::vector<BuildingObject> &buildings);
     bool followSoldierWaypoints(Unit &u);
     void patrolSoldier(Unit &u, const std::vector<BuildingObject> &buildings);
@@ -122,6 +121,7 @@ private: // функции
     bool isCityArea(float x, float y) const;
     QPointF findNearestWalkable(float x, float y, float maxRadius = 40.0F) const;
     void buildRoadGraphCache();
+    bool hasWalkableLineOfSight(float x1, float y1, float x2, float y2) const;
 
 private: // переменные
     LevelDefinition g_currentLevel;
@@ -192,8 +192,10 @@ private:
     QML_ELEMENT
     Q_PROPERTY(QVariantList helicopters READ helicopters NOTIFY helicoptersChanged)
     Q_PROPERTY(QVariantList dropZones READ dropZones NOTIFY helicoptersChanged)
-    Q_PROPERTY(QVariantList equippedTools READ equippedTools WRITE setEquippedTools NOTIFY
-                   equippedToolsChanged)
+    Q_PROPERTY(QVariantList equippedTools
+               READ equippedTools
+               WRITE setEquippedTools
+               NOTIFY equippedToolsChanged)
     Q_PROPERTY(QVariantMap selectedBuildingInfo
                READ selectedBuildingInfo
                NOTIFY selectedBuildingChanged)

@@ -402,13 +402,18 @@ bool MapGenerator::tryPlaceBuilding(
         }
     }
 
-    // Помечаем территорию под зданием как занятую
+    // Помечаем территорию под зданием как занятую, а корпус здания как непросматриваемый (cityMap = 2)
+    float solidHw = bw * 0.5f;
+    float solidHh = bh * 0.5f;
     for (float ly = -hh; ly <= hh; ly += 1.0f) {
         for (float lx = -hw; lx <= hw; lx += 1.0f) {
             int px = static_cast<int>(x + lx * cosA - ly * sinA);
             int py = static_cast<int>(y + lx * sinA + ly * cosA);
             if (px >= 0 && px < mapWidth && py >= 0 && py < mapHeight) {
                 occupied[py * mapWidth + px] = 1;
+                if (std::abs(lx) <= solidHw && std::abs(ly) <= solidHh) {
+                    cityMap[py * mapWidth + px] = 2;
+                }
             }
         }
     }
@@ -628,6 +633,10 @@ void MapGenerator::removeBuilding(BuildingType type,
         float hw = buildingsList[randId].width * 0.5F + 3.0F;
         float hh = buildingsList[randId].height * 0.5F + 3.0F;
 
+        // Помечаем территорию под зданием как занятую, а корпус здания как непросматриваемый (cityMap = 2)
+        float solidHw = buildingsList[i].width * 0.5f;
+        float solidHh = buildingsList[i].height * 0.5f;
+
         // Очищаем занятую территорию под зданием
         for (float ly = -hh; ly <= hh; ly += 1.0F) {
             for (float lx = -hw; lx <= hw; lx += 1.0F) {
@@ -635,6 +644,10 @@ void MapGenerator::removeBuilding(BuildingType type,
                 int py = static_cast<int>(buildingsList[randId].cy + lx * sinA + ly * cosA);
                 if (px >= 0 && px < mapWidth && py >= 0 && py < mapHeight) {
                     occupied[py * mapWidth + px] = 0;
+                    cityMap[py * mapWidth + px] = 1;
+                    if (std::abs(lx) <= solidHw && std::abs(ly) <= solidHh) {
+                        cityMap[py * mapWidth + px] = 1;
+                    }
                 }
             }
         }

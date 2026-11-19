@@ -74,7 +74,7 @@ void GameWorld::buildRoadGraphCache()
             float nx = static_cast<float>(nodes[i].pos.x());
             float ny = static_cast<float>(nodes[i].pos.y());
             float d = std::hypot(nx - bx, ny - by);
-            if (d < bestDist && hasLineOfSight(nx, ny, bx, by)) {
+            if (d < bestDist && hasWalkableLineOfSight(nx, ny, bx, by)) {
                 bestDist = d;
                 bestNode = i;
             }
@@ -102,7 +102,7 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
     float ey = static_cast<float>(endPos.y());
 
     // 1. Прямой путь разрешён ТОЛЬКО если дверь близко И видна без единого препятствия
-    if (std::hypot(ex - sx, ey - sy) < 45.0f && hasLineOfSight(sx, sy, ex, ey)) {
+    if (std::hypot(ex - sx, ey - sy) < 45.0f && hasWalkableLineOfSight(sx, sy, ex, ey)) {
         path.push_back(endPos);
         return path;
     }
@@ -114,7 +114,7 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
         float nx = static_cast<float>(nodes[i].pos.x());
         float ny = static_cast<float>(nodes[i].pos.y());
         float d = std::hypot(nx - sx, ny - sy);
-        if (d < bestStartDist && hasLineOfSight(sx, sy, nx, ny)) {
+        if (d < bestStartDist && hasWalkableLineOfSight(sx, sy, nx, ny)) {
             bestStartDist = d;
             startNode = static_cast<int>(i);
         }
@@ -130,7 +130,7 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
         float nx = static_cast<float>(nodes[i].pos.x());
         float ny = static_cast<float>(nodes[i].pos.y());
         float d = std::hypot(nx - ex, ny - ey);
-        if (d < bestEndDist && hasLineOfSight(nx, ny, ex, ey)) {
+        if (d < bestEndDist && hasWalkableLineOfSight(nx, ny, ex, ey)) {
             bestEndDist = d;
             endNode = static_cast<int>(i);
         }
@@ -239,7 +239,7 @@ int GameWorld::findNearestRoadNode(float x, float y) const
             fallbackId = static_cast<int>(i);
         }
 
-        if (d < bestVisibleDist && hasLineOfSight(x, y, nx, ny)) {
+        if (d < bestVisibleDist && hasWalkableLineOfSight(x, y, nx, ny)) {
             bestVisibleDist = d;
             bestVisibleId = static_cast<int>(i);
         }
@@ -292,7 +292,7 @@ int GameWorld::findNearestAvailableBuilding(float x, float y, bool wantWorkplace
                 float px = static_cast<float>(nodes[nodeIdx].pos.x());
                 float py = static_cast<float>(nodes[nodeIdx].pos.y());
                 float d = std::hypot(px - x, py - y);
-                if (d < bestStartDist && hasLineOfSight(x, y, px, py)) {
+                if (d < bestStartDist && hasWalkableLineOfSight(x, y, px, py)) {
                     bestStartDist = d;
                     startNode = nodeIdx;
                 }
@@ -344,7 +344,7 @@ int GameWorld::findNearestAvailableBuilding(float x, float y, bool wantWorkplace
         float directDistSq = dx * dx + dy * dy;
 
         float pathDistance;
-        if (directDistSq < 45.0F * 45.0F && hasLineOfSight(x, y, bx, by)) {
+        if (directDistSq < 45.0F * 45.0F && hasWalkableLineOfSight(x, y, bx, by)) {
             pathDistance = std::sqrt(directDistSq);
         } else {
             pathDistance = bestStartDist + roadDist + b.distToNode;
@@ -380,12 +380,55 @@ bool GameWorld::hasLineOfSight(float x1, float y1, float x2, float y2) const
     while (true) {
         if (ix1 >= 0 && ix1 < w && iy1 >= 0 && iy1 < h) {
             int idx = iy1 * w + ix1;
-            if (cityMask[idx] == 1 && walkGrid[idx] == 0) {
+            if (cityMask[idx] == 2) {
                 return false;
             }
         }
         if (ix1 == ix2 && iy1 == iy2)
             break;
+        int e2 = 2 * err;
+        if (e2 > -dy) {
+            err -= dy;
+            ix1 += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            iy1 += sy;
+        }
+    }
+    return true;
+}
+bool GameWorld::hasWalkableLineOfSight(float x1, float y1, float x2, float y2) const
+{
+    // Задачи:
+    // 1. Проверить по алгоритму Брезенхэма, что все клетки на отрезке проходимы (walkGrid != 0)
+    // 2. Использовать для определения возможности движения напрямую без обхода по графу дорог
+
+    const auto &walkGrid = g_generator.walkGrid();
+    int w = g_generator.width();
+    int h = g_generator.height();
+
+    int ix1 = static_cast<int>(x1);
+    int iy1 = static_cast<int>(y1);
+    int ix2 = static_cast<int>(x2);
+    int iy2 = static_cast<int>(y2);
+
+    int dx = std::abs(ix2 - ix1);
+    int dy = std::abs(iy2 - iy1);
+    int sx = (ix1 < ix2) ? 1 : -1;
+    int sy = (iy1 < iy2) ? 1 : -1;
+    int err = dx - dy;
+
+    while (true) {
+        if (ix1 < 0 || ix1 >= w || iy1 < 0 || iy1 >= h)
+            return false;
+
+        if (walkGrid[iy1 * w + ix1] == 0)
+            return false;
+
+        if (ix1 == ix2 && iy1 == iy2)
+            break;
+
         int e2 = 2 * err;
         if (e2 > -dy) {
             err -= dy;
@@ -439,8 +482,9 @@ bool GameWorld::isCityArea(float x, float y) const
     int h = g_generator.height();
     if (gx < 0 || gx >= w || gy < 0 || gy >= h)
         return false;
-    return g_generator.cityMask()[gy * w + gx] == 1;
+    return g_generator.cityMask()[gy * w + gx] >= 1;
 }
+
 /*Вызывается из QML*/ QVariantMap GameWorld::snapEvacPoint(float worldX,
                                                            float worldY,
                                                            float snapRadius) const

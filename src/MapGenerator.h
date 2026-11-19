@@ -46,7 +46,8 @@ private: // переменные
     QImage image;
     QImage backgroundImage;
     std::vector<int16_t> walkMap; // 0 = стена/пустырь, 1 = дорога, 2 = тропинка, 10 + id = пол здания
-    std::vector<uint8_t> cityMap; // 1 - застройка, 0 - нет
+    std::vector<uint8_t>
+        cityMap; // 0 - нет застройки, 1 - застройка просматриваемая, 2 - застройка непросматриваемая (здание)
     std::vector<EvacRoute> evacRoutesList;
     std::vector<RoadNode> nodesList;
     std::vector<RoadEdge> edgesList;
