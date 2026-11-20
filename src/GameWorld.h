@@ -58,6 +58,7 @@ private: // функции
     void updateSelectedUnitInfo(bool logDebug = false);
     QString buildingDisplayName(int buildingId) const;
     QString unitStateDisplayName(const Unit &u) const;
+    QString unitDisplayName(int unitId) const;
 
     // Поведение юнитов (разбито из бывшего монолита peopleUpdateActions)
     void peopleUpdateActions(float dt,

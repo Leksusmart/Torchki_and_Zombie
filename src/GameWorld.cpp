@@ -961,6 +961,8 @@ void GameWorld::updateZombieBehavior(Unit &u,
             }
             return;
         }
+
+        u.targetUnitId = g_units[bestTarget].id;
         u.hasLastKnownTarget = true;
         u.lastKnownTargetPos = QPointF(tx, ty);
         float dx = tx - u.x;
@@ -976,6 +978,7 @@ void GameWorld::updateZombieBehavior(Unit &u,
                     victim.hp -= 1;
                 } else if (victim.type == UnitType::Citizen) {
                     infectUnit(victim, false);
+                    u.targetUnitId = -1;
                     u.hasLastKnownTarget = false;
                 }
             }
@@ -1040,12 +1043,14 @@ void GameWorld::updateZombieBehavior(Unit &u,
                              g_generator.height() - 1);
         if (u.insideBuildingId == -1
             && g_generator.walkGrid()[lky * g_generator.width() + lkx] >= 10) {
+            u.targetUnitId = -1;
             u.hasLastKnownTarget = false;
         } else {
             float dx = static_cast<float>(u.lastKnownTargetPos.x()) - u.x;
             float dy = static_cast<float>(u.lastKnownTargetPos.y()) - u.y;
             float d = std::hypot(dx, dy);
             if (d < 4.0f) {
+                u.targetUnitId = -1;
                 u.hasLastKnownTarget = false;
             } else {
                 u.vx = (dx / d) * ZOMBIE_CHASE_SPEED;
@@ -1212,26 +1217,56 @@ void GameWorld::stepUnitMovement(Unit &u,
         u.vy = std::sin(escapeAngle) * currentSpeed;
     }
 
-    // 5. Анти-застревание на пути к зданию
-    if ((u.state == UnitState::GoingToWork || u.state == UnitState::GoingHome)
-        && u.insideBuildingId == -1) {
-        int gx = std::clamp(static_cast<int>(u.x), 0, mapW - 1);
-        int gy = std::clamp(static_cast<int>(u.y), 0, mapH - 1);
-        if (walkGrid[gy * mapW + gx] == 1) {
-            u.stuckTimerSec += dt;
-            if (u.stuckTimerSec >= 1.5f) {
-                float moved = static_cast<float>(
-                    std::hypot(u.x - u.lastCheckPos.x(), u.y - u.lastCheckPos.y()));
-                u.lastCheckPos = QPointF(u.x, u.y);
-                u.stuckTimerSec = 0.0f;
-                if (moved < roadWidth() * 0.25f && u.targetBuildingId >= 0
+    // 5. Анти-застревание при движении по waypoints (для всех типов юнитов)
+    if (!u.waypoints.empty() && u.insideBuildingId == -1) {
+        u.stuckTimerSec += dt;
+        if (u.stuckTimerSec >= 1.2f) {
+            float moved = static_cast<float>(
+                std::hypot(u.x - u.lastCheckPos.x(), u.y - u.lastCheckPos.y()));
+            u.lastCheckPos = QPointF(u.x, u.y);
+            u.stuckTimerSec = 0.0f;
+
+            if (moved < 2.0f) {
+                if ((u.state == UnitState::GoingToWork || u.state == UnitState::GoingHome)
+                    && u.targetBuildingId >= 0
                     && u.targetBuildingId < static_cast<int>(buildings.size())) {
                     u.waypoints = buildPathToBuilding(QPointF(u.x, u.y),
                                                       buildings[u.targetBuildingId]);
+                } else {
+                    // Для зомби, солдат и гуляющих: сбрасываем застрявший маршрут и след
+                    u.waypoints.clear();
+                    u.targetUnitId = -1;
+                    u.hasLastKnownTarget = false;
                 }
             }
         }
+    } else {
+        u.stuckTimerSec = 0.0f;
+        u.lastCheckPos = QPointF(u.x, u.y);
     }
+}
+
+QString GameWorld::unitDisplayName(int unitId) const
+{
+    if (unitId < 0)
+        return "Нет";
+
+    for (const auto &u : g_units) {
+        if (u.id == unitId && u.hp > 0) {
+            QString role = "Житель";
+            if (u.type == UnitType::Soldier)
+                role = "Солдат";
+            else if (u.type == UnitType::Vaccinated)
+                role = "Вакцинированный";
+            else if (u.type == UnitType::Zombie)
+                role = "Зомби";
+            else if (u.isInfected)
+                role = "Инфицирован";
+
+            return QString("%1 #%2").arg(role).arg(u.id);
+        }
+    }
+    return QString("Юнит #%1 (погиб)").arg(unitId);
 }
 
 void GameWorld::rebuildUnitRenderData()
@@ -1443,7 +1478,26 @@ void GameWorld::updateSelectedUnitInfo(bool logDebug)
     const auto &buildings = g_generator.buildings();
     const auto &nodes = g_generator.nodes();
 
-    if (found->type == UnitType::Soldier && found->isRetreating) {
+    if (found->type == UnitType::Zombie) {
+        if (found->hasLastKnownTarget) {
+            QString victimName = unitDisplayName(found->targetUnitId);
+            QString targetPos = QString(" (x:%1, y:%2)")
+                                    .arg(found->lastKnownTargetPos.x(), 0, 'f', 1)
+                                    .arg(found->lastKnownTargetPos.y(), 0, 'f', 1);
+            targetName = victimName + targetPos;
+            targetCoordsStr = targetPos;
+        } else {
+            targetName = "Нет";
+        }
+    } else if (found->type == UnitType::Soldier && found->targetUnitId != -1) {
+        //TODO FIX
+        QString victimName = unitDisplayName(found->targetUnitId);
+        QString targetPos = QString(" (x:%1, y:%2)")
+                                .arg(found->lastKnownTargetPos.x(), 0, 'f', 1)
+                                .arg(found->lastKnownTargetPos.y(), 0, 'f', 1);
+        targetName = victimName + targetPos;
+        targetCoordsStr = targetPos;
+    } else if (found->type == UnitType::Soldier && found->isRetreating) {
         if (found->targetBuildingId >= 0
             && found->targetBuildingId < static_cast<int>(nodes.size())) {
             const auto &node = nodes[found->targetBuildingId];
@@ -1542,6 +1596,7 @@ void GameWorld::updateSelectedBuildingInfo()
 
     info["valid"] = true;
     info["type"] = typeName;
+    info["id"] = b.id;
     info["occupants"] = b.currentOccupants;
     info["capacity"] = b.capacity;
     info["health"] = b.health;

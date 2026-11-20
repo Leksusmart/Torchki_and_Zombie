@@ -186,10 +186,20 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
     std::reverse(nodeChain.begin(), nodeChain.end());
 
     size_t startIdx = 0;
-    if (!nodeChain.empty()) {
-        float dToFirst = static_cast<float>(
-            std::hypot(nodes[nodeChain[0]].pos.x() - sx, nodes[nodeChain[0]].pos.y() - sy));
-        if (dToFirst < 3.0f && nodeChain.size() > 1) {
+    if (nodeChain.size() >= 2) {
+        QPointF p0 = nodes[nodeChain[0]].pos;
+        QPointF p1 = nodes[nodeChain[1]].pos;
+        float dToFirst = static_cast<float>(std::hypot(p0.x() - sx, p0.y() - sy));
+        float segLen = static_cast<float>(std::hypot(p1.x() - p0.x(), p1.y() - p0.y()));
+        float dToSecond = static_cast<float>(std::hypot(p1.x() - sx, p1.y() - sy));
+
+        // Если юнит уже стоит вплотную к первому узлу ИЛИ уже продвинулся вдоль ребра p0 -> p1 (видит p1 напрямую)
+        if (dToFirst < 3.0f
+            || (dToSecond < segLen
+                && hasWalkableLineOfSight(sx,
+                                          sy,
+                                          static_cast<float>(p1.x()),
+                                          static_cast<float>(p1.y())))) {
             startIdx = 1;
         }
     }

@@ -4,48 +4,103 @@ project(${PROJECT_NAME} VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-#======================= INCLUSION OF Qt =======================#
-set(CMAKE_PREFIX_PATH $ENV{QTDIR})
+if(ANDROID)
+    find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 QuickLayouts QuickControls2Basic QuickControls2Material)
+else()
+    if(DEFINED ENV{QTDIR})
+        set(CMAKE_PREFIX_PATH $ENV{QTDIR})
+    endif()
+    find_package(Qt6 REQUIRED COMPONENTS Quick)
+endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Quick)
+# Отключаем вызов qmlimportscanner на этапе CMake для обеих платформ (Android и ПК)
+macro(qt6_import_qml_plugins)
+endmacro()
 
-#=================== INCLUSION OF Project Files ====================#
+qt_standard_project_setup(REQUIRES 6.10)
+
 set(SOURCE_DIR "${CMAKE_SOURCE_DIR}/src")
 
 file(GLOB_RECURSE PROJECT_SOURCES
-    "${SOURCE_DIR}/*.qrc"
-    "${SOURCE_DIR}/*.rc"
     "${SOURCE_DIR}/*.cpp"
     "${SOURCE_DIR}/*.h"
-    "${SOURCE_DIR}/*.qml"
 )
 
-file(GLOB_RECURSE QML_SOURCES RELATIVE "${CMAKE_SOURCE_DIR}"
-    "${SOURCE_DIR}/*.qml"
+if(WIN32)
+    file(GLOB_RECURSE WIN_RESOURCES
+        "${SOURCE_DIR}/*.qrc"
+        "${SOURCE_DIR}/*.rc"
+    )
+    list(APPEND PROJECT_SOURCES ${WIN_RESOURCES})
+endif()
+
+file(GLOB_RECURSE LEVEL_ASSETS RELATIVE "${CMAKE_SOURCE_DIR}"
+    "levels/*.png"
 )
 
-#=================== SETUP EXECUTABLE ====================#
-qt_standard_project_setup(REQUIRES 6.10)
-
-add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
+qt_add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
 
 qt_add_qml_module(${PROJECT_NAME}
-    URI Torchki_and_Zombie
+    URI TorchkiAndZombie
     VERSION 1.0
-    RESOURCE_PREFIX /
-    QML_FILES ${QML_SOURCES}
+    RESOURCE_PREFIX "/qt/qml"
+    QML_FILES
+        src/Main.qml
+        src/ToolkitMenu.qml
     RESOURCES
-        levels/Level1.png
+        ${LEVEL_ASSETS}
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${SOURCE_DIR})
 
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    WIN32_EXECUTABLE TRUE
-)
+if(ANDROID)
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickLayouts
+        Qt6::QuickControls2Basic
+        Qt6::QuickControls2Material
+    )
 
-#===================== LINKING LIBRARIES =======================#
-target_link_libraries(${PROJECT_NAME} PRIVATE Qt6::Quick)
+    set(DEPLOY_JSON "${CMAKE_BINARY_DIR}/android-${PROJECT_NAME}-deployment-settings.json")
+    set(FIX_SCRIPT "${CMAKE_BINARY_DIR}/fix_deploy_json.cmake")
+
+    file(WRITE "${FIX_SCRIPT}" [=[
+if(EXISTS "${JSON_FILE}")
+    file(READ "${JSON_FILE}" CONTENT)
+    string(REGEX REPLACE "\"qml-root-path\"[ \t]*:[ \t]*\\[[^]]*\\]" "\"qml-root-path\" : [ ]" CONTENT "${CONTENT}")
+    file(WRITE "${JSON_FILE}" "${CONTENT}")
+endif()
+
+set(QT_ANDROID_DIR "A:/Qt/6.12.0/android_arm64_v8a")
+set(BUILD_ANDROID_DIR "${BIN_DIR}/android-build-Torchki_and_Zombie")
+
+file(COPY "${QT_ANDROID_DIR}/qml/QtQuick" DESTINATION "${BUILD_ANDROID_DIR}/assets/qt/qml")
+
+file(GLOB_RECURSE QML_SO_FILES "${QT_ANDROID_DIR}/qml/QtQuick/*_arm64-v8a.so")
+file(MAKE_DIRECTORY "${BUILD_ANDROID_DIR}/libs/arm64-v8a")
+file(COPY ${QML_SO_FILES} DESTINATION "${BUILD_ANDROID_DIR}/libs/arm64-v8a")
+
+file(GLOB QT_QUICK_LIBS
+    "${QT_ANDROID_DIR}/lib/libQt6Quick*_arm64-v8a.so"
+    "${QT_ANDROID_DIR}/lib/libQt6Qml*_arm64-v8a.so"
+)
+file(COPY ${QT_QUICK_LIBS} DESTINATION "${BUILD_ANDROID_DIR}/libs/arm64-v8a")
+]=])
+
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -DJSON_FILE="${DEPLOY_JSON}" -DBIN_DIR="${CMAKE_BINARY_DIR}" -P "${FIX_SCRIPT}"
+        COMMENT "Preparing QML assets and plugins for Android APK"
+    )
+else()
+    target_link_libraries(${PROJECT_NAME} PRIVATE Qt6::Quick)
+
+    if(WIN32)
+        set_target_properties(${PROJECT_NAME} PROPERTIES
+            WIN32_EXECUTABLE TRUE
+        )
+    endif()
+endif()
 
 install(TARGETS ${PROJECT_NAME}
     BUNDLE DESTINATION .

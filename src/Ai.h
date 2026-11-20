@@ -155,7 +155,8 @@ void GameWorld::updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObj
 
     // --- 2. СМЕНА РАСПОРЯДКА (ПОРА НА РАБОТУ / ПОРА ДОМОЙ) ---
     // Если юнит гуляет (Walking), переключаем его на работу/дом только когда он уже вышел на дорогу (waypoints пусты)
-    bool canSwitchFromWalk = (u.state == UnitState::Walking && u.waypoints.empty());
+    bool canSwitchFromWalk = (u.state == UnitState::Walking && u.waypoints.empty()
+                              && u.stateTimerSec <= 0.0F);
 
     if (shouldBeAtWork
         && (u.state == UnitState::AtHome || u.state == UnitState::GoingHome || canSwitchFromWalk)) {
@@ -241,12 +242,21 @@ void GameWorld::updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObj
 
     // --- 4. СВОБОДНАЯ ПРОГУЛКА ---
     if (u.state == UnitState::Walking) {
+        u.stateTimerSec -= dt;
+
+        // Идём по текущему маршруту прогулки
         if (!u.waypoints.empty()) {
             QPointF target = u.waypoints.front();
             float dx = static_cast<float>(target.x()) - u.x;
             float dy = static_cast<float>(target.y()) - u.y;
             float dist = std::hypot(dx, dy);
-            if (dist < 1.5F) {
+
+            int gx = std::clamp(static_cast<int>(u.x), 0, mapW - 1);
+            int gy = std::clamp(static_cast<int>(u.y), 0, mapH - 1);
+            bool onMainRoad = (walkGrid[gy * mapW + gx] == 1);
+            float reachR = (onMainRoad && u.waypoints.size() > 1) ? (roadWidth() * 0.35F) : 1.5F;
+
+            if (dist < reachR) {
                 u.waypoints.erase(u.waypoints.begin());
             } else {
                 u.vx = (dx / dist) * BASE_CITIZEN_SPEED;
@@ -255,18 +265,30 @@ void GameWorld::updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObj
             return;
         }
 
-        u.stateTimerSec -= dt;
-        if (u.stateTimerSec <= 0.0F) {
-            int bId = findNearestAvailableBuilding(u.x, u.y, shouldBeAtWork);
-            if (bId != -1) {
-                u.targetBuildingId = bId;
-                buildings[bId].reservedOccupants++; // Мгновенная бронь места!
-                u.state = shouldBeAtWork ? UnitState::GoingToWork : UnitState::GoingHome;
-                u.waypoints = buildPathToBuilding(QPointF(u.x, u.y), buildings[bId]);
+        // Если время прогулки ещё не вышло — сначала выходим из здания (если внутри), затем гуляем по узлам
+        if (u.stateTimerSec > 0.0F) {
+            if (u.insideBuildingId >= 0 && u.insideBuildingId < static_cast<int>(buildings.size())) {
                 prependExitPathIfInside(u.waypoints);
-            } else {
-                u.stateTimerSec = 5.0F;
+                return;
             }
+            const auto &nodes = g_generator.nodes();
+            if (!nodes.empty()) {
+                int randNode = rng->bounded(static_cast<int>(nodes.size()));
+                u.waypoints = buildPathBetween(QPointF(u.x, u.y), nodes[randNode].pos);
+            }
+            return;
+        }
+
+        // Время прогулки истекло — возвращаемся к рабочему/домашнему расписанию
+        int bId = findNearestAvailableBuilding(u.x, u.y, shouldBeAtWork);
+        if (bId != -1) {
+            u.targetBuildingId = bId;
+            buildings[bId].reservedOccupants++;
+            u.state = shouldBeAtWork ? UnitState::GoingToWork : UnitState::GoingHome;
+            u.waypoints = buildPathToBuilding(QPointF(u.x, u.y), buildings[bId]);
+            prependExitPathIfInside(u.waypoints);
+        } else {
+            u.stateTimerSec = 5.0F;
         }
         return;
     }
@@ -366,7 +388,20 @@ void GameWorld::infectUnit(Unit &u, bool immediateZombie)
         u.isInfected = false;
         u.panicTimerSec = 0.0F;
         u.hasLastKnownTarget = false;
+        u.targetBuildingId = -1;
         u.waypoints.clear();
+
+        // Сбрасываем старый след и маршрут у зомби, преследовавших этого жителя
+        for (auto &other : g_units) {
+            if (other.type == UnitType::Zombie && other.hasLastKnownTarget) {
+                float d = static_cast<float>(std::hypot(other.lastKnownTargetPos.x() - u.x,
+                                                        other.lastKnownTargetPos.y() - u.y));
+                if (d < 15.0F) {
+                    other.hasLastKnownTarget = false;
+                    other.waypoints.clear();
+                }
+            }
+        }
     } else if (!u.isInfected) {
         auto *rng = QRandomGenerator::global();
         u.isInfected = true;

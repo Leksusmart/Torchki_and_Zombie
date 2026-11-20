@@ -33,7 +33,10 @@ bool GameWorld::updateSoldierEvacuation(Unit &u,
     // 3. Стрельба по врагам в радиусе огня на ходу
     int fireTargetIdx = findSoldierFireTarget(u, activeZombies);
     if (fireTargetIdx != -1) {
+        u.targetUnitId = g_units[fireTargetIdx].id;
         fireAtTarget(u, static_cast<size_t>(fireTargetIdx));
+    } else {
+        u.targetUnitId = -1;
     }
 
     // 4. Выбор безопасного выхода и построение / смена маршрута

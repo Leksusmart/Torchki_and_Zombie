@@ -104,7 +104,7 @@ enum class BuildingType : uint8_t {
 
 struct LevelConfig
 {
-    QString mapPngPath = ":/Torchki_and_Zombie/levels/Level1.png";
+    QString mapPngPath = ":/qt/qml/TorchkiAndZombie/levels/Level1.png";
     int initialCitizens = 2000;
     double initialBudget = 300.0;
     float startHour = 8.0F;
@@ -116,7 +116,7 @@ struct LevelConfig
 struct LevelDefinition
 {
     QString levelName = "Manhattan";
-    QString mapPngPath = ":/Torchki_and_Zombie/levels/Level1.png";
+    QString mapPngPath = ":/qt/qml/TorchkiAndZombie/levels/Level1.png";
     float roadWidthMeters = 13.0f;
     float roadWidthMetersToBuilding = 4.0F;
 
@@ -252,6 +252,8 @@ struct BuildingObject
 struct Unit
 {
     int id = -1;
+    int targetUnitId = -1; // ID юнита-цели (для зомби и солдат)
+
     float x, y;
     float vx, vy;
     UnitType type;

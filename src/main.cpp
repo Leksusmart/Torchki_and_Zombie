@@ -1,17 +1,25 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#ifdef Q_OS_ANDROID
+#include <QQuickStyle>
+#endif
 #include <QSurfaceFormat>
 
 int main(int argc, char *argv[])
 {
     QSurfaceFormat format;
-    format.setSamples(2); // 2x MSAA для гладких краёв юнитов и зданий
+    format.setSamples(2);
     QSurfaceFormat::setDefaultFormat(format);
 
     QGuiApplication app(argc, argv);
+	
+    #ifdef Q_OS_ANDROID
+		QQuickStyle::setStyle("Basic");
+	#endif
+
 
     QQmlApplicationEngine engine;
-    const QUrl url(QStringLiteral("qrc:/Torchki_and_Zombie/src/Main.qml"));
+    const QUrl url(QStringLiteral("qrc:/qt/qml/TorchkiAndZombie/src/Main.qml"));
 
     QObject::connect(
         &engine,

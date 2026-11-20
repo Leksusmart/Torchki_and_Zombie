@@ -1,7 +1,8 @@
-import QtQuick
-import QtQuick.Controls
-import QtQuick.Layouts
-import Torchki_and_Zombie
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
+
+import TorchkiAndZombie
 
 Window {
     id: rootWindow
@@ -254,7 +255,7 @@ Window {
                     spacing: 2
 
                     Text {
-                        text: gameWorld.selectedBuildingInfo.type || ""
+                        text: (gameWorld.selectedBuildingInfo.type || "") + " #"+gameWorld.selectedBuildingInfo.id
                         color: "#63b3ed"
                         font.pixelSize: 10
                         font.bold: true
@@ -608,6 +609,42 @@ Window {
                          cameraContainer.y = centerY - worldCenterY * newScale
                      }
         }
+
+        // Масштабирование двумя пальцами (pinch-to-zoom) на сенсорном экране
+        PinchHandler {
+            id: pinchHandler
+            target: null // Управляем масштабом и позицией вручную, чтобы сохранить центрирование как у колёсика мыши
+            minimumScale: 0.10
+            maximumScale: 5.0
+
+            property real startScale: 1.0
+
+            onActiveChanged: {
+                if (active) {
+                    startScale = cameraContainer.scale
+                }
+            }
+
+            onScaleChanged: (delta) => {
+                let oldScale = cameraContainer.scale
+                let newScale = Math.max(0.25, Math.min(5.0, startScale * activeScale))
+                if (newScale === oldScale) return
+
+                // Точка между двумя пальцами в координатах viewport
+                let pivotX = centroid.position.x
+                let pivotY = centroid.position.y
+
+                // Переводим эту точку в мировые координаты карты до изменения масштаба
+                let worldPivotX = (pivotX - cameraContainer.x) / oldScale
+                let worldPivotY = (pivotY - cameraContainer.y) / oldScale
+
+                // Применяем новый масштаб и удерживаем точку под пальцами на месте
+                cameraContainer.scale = newScale
+                cameraContainer.x = pivotX - worldPivotX * newScale
+                cameraContainer.y = pivotY - worldPivotY * newScale
+            }
+        }
+
     }
 
     // Верхняя панель статистики (HUD)

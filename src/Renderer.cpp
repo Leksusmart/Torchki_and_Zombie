@@ -97,12 +97,10 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     }
 
     if (g_mapDirty) {
-        if (!bgNode->texture()) {
-            const QImage &bgImg = g_world->backgroundImage();
-            if (!bgImg.isNull()) {
-                bgNode->setTexture(window()->createTextureFromImage(bgImg));
-                bgNode->setRect(0, 0, bgImg.width(), bgImg.height());
-            }
+        const QImage &bgImg = g_world->backgroundImage();
+        if (!bgImg.isNull()) {
+            bgNode->setTexture(window()->createTextureFromImage(bgImg));
+            bgNode->setRect(0, 0, bgImg.width(), bgImg.height());
         }
         fillGeometry(buildingsNode->geometry(), g_world->buildingsGeometry());
         buildingsNode->markDirty(QSGNode::DirtyGeometry);
@@ -110,7 +108,7 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     }
 
     if (g_unitsDirty) {
-        fillCircleGeometry(unitsNode->geometry(), g_world->unitGeometry(), 7);
+        fillCircleGeometry(unitsNode->geometry(), g_world->unitGeometry(), 10);
         unitsNode->markDirty(QSGNode::DirtyGeometry);
 
         fillGeometry(overlaysNode->geometry(), g_world->buildingOverlaysGeometry());

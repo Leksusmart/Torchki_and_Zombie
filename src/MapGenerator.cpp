@@ -618,9 +618,10 @@ void MapGenerator::removeBuilding(BuildingType type,
         // Находим нужное здание
         int randId = 0;
         int cycleCounter = 0;
+        auto *rng = QRandomGenerator::global();
         do {
             ++cycleCounter;
-            randId = QRandomGenerator::global()->bounded(buildingsList.size());
+            randId = rng->bounded(static_cast<int>(buildingsList.size()));
         } while (cycleCounter < 100000 && buildingsList[randId].type != type);
 
         if (buildingsList[randId].type != type)
@@ -634,8 +635,8 @@ void MapGenerator::removeBuilding(BuildingType type,
         float hh = buildingsList[randId].height * 0.5F + 3.0F;
 
         // Помечаем территорию под зданием как занятую, а корпус здания как непросматриваемый (cityMap = 2)
-        float solidHw = buildingsList[i].width * 0.5f;
-        float solidHh = buildingsList[i].height * 0.5f;
+        float solidHw = buildingsList[randId].width * 0.5f;
+        float solidHh = buildingsList[randId].height * 0.5f;
 
         // Очищаем занятую территорию под зданием
         for (float ly = -hh; ly <= hh; ly += 1.0F) {
@@ -927,6 +928,24 @@ void MapGenerator::buildBuildingInteriorsAndPaths()
             }
         }
         if (bestSide != -1 && bestSmoothPath.size() >= 2) {
+            // Продлеваем первый сегмент тропинки вглубь дороги на 40% ширины дороги,
+            // чтобы на стыке не оставалось узкого угла бордюра
+            QPointF p0 = bestSmoothPath[0];
+            QPointF p1 = bestSmoothPath[1];
+            float dx = static_cast<float>(p0.x() - p1.x());
+            float dy = static_cast<float>(p0.y() - p1.y());
+            float len = std::hypot(dx, dy);
+            if (len > 0.01F) {
+                float extend = level.roadWidthMeters * 0.4F;
+                QPointF deepRoadPt(p0.x() + (dx / len) * extend, p0.y() + (dy / len) * extend);
+                int rx = static_cast<int>(deepRoadPt.x());
+                int ry = static_cast<int>(deepRoadPt.y());
+                if (rx >= 0 && rx < mapWidth && ry >= 0 && ry < mapHeight
+                    && walkMap[ry * mapWidth + rx] == 1) {
+                    bestSmoothPath.insert(bestSmoothPath.begin(), deepRoadPt);
+                }
+            }
+
             b.doorCenter = bestSmoothPath.back();
             b.doorAngleRad = b.angleRad + sides[bestSide].sideAngleOffset;
             b.pathFromRoad = bestSmoothPath;
