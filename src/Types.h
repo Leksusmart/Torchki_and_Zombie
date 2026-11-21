@@ -267,6 +267,7 @@ struct Unit
 
     float panicTimerSec = 0.0F;
     float attackCooldownSec = 0.0F; // Перезарядка укуса (0.5с) или выстрела (1.0с)
+    float repathCooldownSec = 0.0F; // Кулдаун на частое перестроение маршрута Дейкстрой
 
     bool hasLastKnownTarget = false; // Помнит ли последнюю позицию цели
     QPointF lastKnownTargetPos;      // Координаты, где цель скрылась за углом

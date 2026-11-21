@@ -12,6 +12,10 @@
 #include "Helicopter.h"
 #include "Navigation.h"
 
+#include <QDebug>
+#include <QElapsedTimer>
+#include <QRandomGenerator>
+
 GameWorld::GameWorld(QObject *parent)
     : QObject(parent)
 {
@@ -63,6 +67,17 @@ void GameWorld::startLevel(const LevelConfig &config)
     rebuildActiveEvacuationsList();
     buildRoadGraphCache();
     buildBuildingsGeometry();
+    rebuildBurningLights();
+
+    // Заполнение пространственных сетоу
+    g_unitGridCols = (g_generator.width() + UNIT_GRID_CELL - 1) / UNIT_GRID_CELL;
+    g_unitGridRows = (g_generator.height() + UNIT_GRID_CELL - 1) / UNIT_GRID_CELL;
+    g_buildingSpatialGrid.assign(g_unitGridCols * g_unitGridRows, {});
+    for (const auto &b : g_generator.buildings()) {
+        int cx = std::clamp(static_cast<int>(b.cx) / UNIT_GRID_CELL, 0, g_unitGridCols - 1);
+        int cy = std::clamp(static_cast<int>(b.cy) / UNIT_GRID_CELL, 0, g_unitGridRows - 1);
+        g_buildingSpatialGrid[cy * g_unitGridCols + cx].push_back(b.id);
+    }
 
     // 4. Юниты и налоги
     spawnInitialUnits(g_currentConfig.initialCitizens);
@@ -407,6 +422,18 @@ void GameWorld::tick()
     if (g_paused)
         return;
 
+    constexpr int PROFILE_INTERVAL_TICKS = 120; // Вывод статистики каждые X тиков (~2 сек при 60 FPS)
+    static int profTicks = 0;
+    static qint64 profTotalNs = 0;
+    static qint64 profZonesAndBuildingsNs = 0;
+    static qint64 profPeopleActionsNs = 0;
+    static qint64 profPostUnitsAndEvacNs = 0;
+    static qint64 profEffectsAndHeliNs = 0;
+    static qint64 profRenderRebuildNs = 0;
+    QElapsedTimer totalTimer;
+    QElapsedTimer stepTimer;
+    totalTimer.start();
+
     auto *rng = QRandomGenerator::global();
     const double dt = 0.016f * g_speedMultiplier;
     const float dtHours = dt * g_currentConfig.gameHoursPerSec;
@@ -433,6 +460,9 @@ void GameWorld::tick()
 
     // 2. Вспышки
     processOutbreaks();
+
+    // --- ЗАМЕР 1: Зоны зданий, таймеры зданий, инкубация и сбор целей ---
+    stepTimer.start();
 
     auto &buildings = const_cast<std::vector<BuildingObject> &>(g_generator.buildings());
     bool buildingsVisualDirty = false;
@@ -534,6 +564,38 @@ void GameWorld::tick()
             }
         }
     }
+    // Заполняем пространственные сетки целей и зомби
+    if (g_unitGridCols > 0 && g_unitGridRows > 0) {
+        const size_t totalCells = static_cast<size_t>(g_unitGridCols * g_unitGridRows);
+        if (g_targetSpatialGrid.size() != totalCells) {
+            g_targetSpatialGrid.resize(totalCells);
+            g_zombieSpatialGrid.resize(totalCells);
+        }
+        for (size_t c = 0; c < totalCells; ++c) {
+            g_targetSpatialGrid[c].clear();
+            g_zombieSpatialGrid[c].clear();
+        }
+
+        for (size_t idx : zombieTargets) {
+            int cx = std::clamp(static_cast<int>(g_units[idx].x) / UNIT_GRID_CELL,
+                                0,
+                                g_unitGridCols - 1);
+            int cy = std::clamp(static_cast<int>(g_units[idx].y) / UNIT_GRID_CELL,
+                                0,
+                                g_unitGridRows - 1);
+            g_targetSpatialGrid[cy * g_unitGridCols + cx].push_back(idx);
+        }
+
+        for (size_t idx : activeZombies) {
+            int cx = std::clamp(static_cast<int>(g_units[idx].x) / UNIT_GRID_CELL,
+                                0,
+                                g_unitGridCols - 1);
+            int cy = std::clamp(static_cast<int>(g_units[idx].y) / UNIT_GRID_CELL,
+                                0,
+                                g_unitGridRows - 1);
+            g_zombieSpatialGrid[cy * g_unitGridCols + cx].push_back(idx);
+        }
+    }
 
     // Сохраняем состояние занятости зданий (пусто / есть люди) до шага симуляции
     if (prevRoofOpen.empty())
@@ -542,8 +604,20 @@ void GameWorld::tick()
         prevRoofOpen[i] = (buildings[i].currentOccupants > 0) ? 1 : 0;
     }
 
-    peopleUpdateActions(dt, buildings, activeZombies, panickingOutdoors, zombieTargets,
+    // --- ЗАМЕР 2: Основной ИИ и физика движения всех юнитов (peopleUpdateActions) ---
+    profZonesAndBuildingsNs += stepTimer.nsecsElapsed();
+    stepTimer.restart();
+
+    peopleUpdateActions(dt,
+                        buildings,
+                        activeZombies,
+                        panickingOutdoors,
+                        zombieTargets,
                         buildingsVisualDirty);
+
+    // --- ЗАМЕР 3: Пересчёт занятости, удаление погибших и призыв на эвакуацию ---
+    profPeopleActionsNs += stepTimer.nsecsElapsed();
+    stepTimer.restart();
 
     // обновляем состояние занятости зданий по актуальным координатам
     for (auto &b : buildings) {
@@ -583,6 +657,7 @@ void GameWorld::tick()
     }
     if (buildingsVisualDirty) {
         buildBuildingsGeometry();
+        rebuildBurningLights();
         emit mapUpdated();
     }
 
@@ -622,31 +697,42 @@ void GameWorld::tick()
         g_zombiesCount = zombies;
         emit statsChanged();
     }
+
+    // --- ЗАМЕР 4: Эффекты, вертолёты и таймеры эвакуации ---
+    profPostUnitsAndEvacNs += stepTimer.nsecsElapsed();
+    stepTimer.restart();
+
     updateEffects(dt);
     updateHelicopters(dt);
     updateEvacuations(dt);
 
-    // Постоянный призыв на эвакуацию всех жителей, оказавшихся в радиусе 100м
+    // --- ЗАМЕР 5: Пересборка геометрии рендера и оверлеев ---
+    profEffectsAndHeliNs += stepTimer.nsecsElapsed();
+    stepTimer.restart();
+
+    // Постоянный призыв на эвакуацию: проверяем по 1/15 части юнитов за тик для ровного FPS
+    static int evacSlice = 0;
+    evacSlice = (evacSlice + 1) % 15;
+
     for (const auto &ev : g_evacs) {
         if (ev.completed)
-            continue; // Когда 50 мест заняты или 30с вышли, новых больше не зовём
+            continue;
 
-        for (auto &u : g_units) {
+        for (size_t i = evacSlice; i < g_units.size(); i += 15) {
+            auto &u = g_units[i];
             if (u.type != UnitType::Citizen && u.type != UnitType::Vaccinated)
                 continue;
             if ((u.state == UnitState::Evacuating || u.state == UnitState::PanicEvacuating)
                 && u.targetBuildingId == ev.evacNodeId)
-                continue; // Уже бежит на эту эвакуацию
+                continue;
+            if (u.state == UnitState::Walking && u.stateTimerSec > 0.0F)
+                continue;
 
-            //
             float dx = u.x - static_cast<float>(ev.evacPos.x());
             float dy = u.y - static_cast<float>(ev.evacPos.y());
-            if (dx * dx + dy * dy <= 250.0F * 250.0F) { // Если попадает юнит в радиус эвакуации
-                if (u.panicTimerSec > 0.0F)
-                    u.state = UnitState::PanicEvacuating;
-                else
-                    u.state = UnitState::Evacuating;
-
+            if (dx * dx + dy * dy <= 250.0F * 250.0F) {
+                u.state = (u.panicTimerSec > 0.0F) ? UnitState::PanicEvacuating
+                                                   : UnitState::Evacuating;
                 u.targetBuildingId = ev.evacNodeId;
                 u.waypoints = buildPathBetween(QPointF(u.x, u.y), ev.evacPos);
             }
@@ -667,6 +753,42 @@ void GameWorld::tick()
     }
 
     emit unitsUpdated();
+
+    // --- ИТОГОВЫЙ ПОДСЧЁТ И ВЫВОД КАЖДЫЕ X ТИКОВ ---
+    profRenderRebuildNs += stepTimer.nsecsElapsed();
+    profTotalNs += totalTimer.nsecsElapsed();
+    profTicks++;
+
+    if (profTicks >= PROFILE_INTERVAL_TICKS) {
+        auto toAvgMs = [&](qint64 ns) -> double {
+            return (static_cast<double>(ns) / profTicks) / 1'000'000.0;
+        };
+        double avgTotal = toAvgMs(profTotalNs);
+        double avgZones = toAvgMs(profZonesAndBuildingsNs);
+        double avgPeople = toAvgMs(profPeopleActionsNs);
+        double avgPost = toAvgMs(profPostUnitsAndEvacNs);
+        double avgFx = toAvgMs(profEffectsAndHeliNs);
+        double avgRender = toAvgMs(profRenderRebuildNs);
+        qDebug().noquote()
+            << QString("=== TICK PROFILE (avg over %1 ticks | units: %2 | speed: %3x) ===")
+                   .arg(profTicks)
+                   .arg(g_units.size())
+                   .arg(g_speedMultiplier)
+            << QString("\n  Total tick:         %1 ms (budget: 16.67 ms)").arg(avgTotal, 0, 'f', 3)
+            << QString("\n  1. Zones & Timers:  %1 ms").arg(avgZones, 0, 'f', 3)
+            << QString("\n  2. peopleActions:   %1 ms").arg(avgPeople, 0, 'f', 3)
+            << QString("\n  3. Post & EvacCall: %1 ms").arg(avgPost, 0, 'f', 3)
+            << QString("\n  4. Effects & Heli:  %1 ms").arg(avgFx, 0, 'f', 3)
+            << QString("\n  5. Render Rebuild:  %1 ms").arg(avgRender, 0, 'f', 3);
+        // Обнуляем все счётчики для следующего окна измерений
+        profTicks = 0;
+        profTotalNs = 0;
+        profZonesAndBuildingsNs = 0;
+        profPeopleActionsNs = 0;
+        profPostUnitsAndEvacNs = 0;
+        profEffectsAndHeliNs = 0;
+        profRenderRebuildNs = 0;
+    }
 }
 void GameWorld::peopleUpdateActions(float dt,
                                     std::vector<BuildingObject> &buildings,
@@ -675,28 +797,78 @@ void GameWorld::peopleUpdateActions(float dt,
                                     const std::vector<size_t> &zombieTargets,
                                     bool &buildingsVisualDirty)
 {
-    // Задачи:
-    // 1. Для каждого живого юнита выбрать обработчик по типу
-    // 2. Применить урон от огня, отталкивание от стен и шаг перемещения
+    constexpr int PROFILE_INTERVAL_TICKS = 120;
+    static int profTicks = 0;
+    static qint64 profCitizenBehaviorNs = 0;
+    static qint64 profSoldierBehaviorNs = 0;
+    static qint64 profZombieBehaviorNs = 0;
+    static qint64 profStepMovementNs = 0;
+
+    static int countCitizens = 0;
+    static int countSoldiers = 0;
+    static int countZombies = 0;
+
+    QElapsedTimer subTimer;
 
     for (size_t i = 0; i < g_units.size(); ++i) {
         Unit &u = g_units[i];
         if (u.hp <= 0)
             continue;
 
-        // 1. Поведение по типу
         u.stateTimerSec -= dt;
+
+        // 1. Поведение по типу с замером каждой роли
+        subTimer.start();
         if (u.type == UnitType::Citizen || u.type == UnitType::Vaccinated) {
             updateCitizenBehavior(u, i, dt, buildings, activeZombies, panickingOutdoors);
+            profCitizenBehaviorNs += subTimer.nsecsElapsed();
+            countCitizens++;
         } else if (u.type == UnitType::Soldier) {
             updateSoldierBehavior(u, dt, buildings, activeZombies);
+            profSoldierBehaviorNs += subTimer.nsecsElapsed();
+            countSoldiers++;
         } else if (u.type == UnitType::Zombie) {
             updateZombieBehavior(u, dt, buildings, zombieTargets, buildingsVisualDirty);
+            profZombieBehaviorNs += subTimer.nsecsElapsed();
+            countZombies++;
         }
 
-        // 2. Общая физика шага
-        if (u.onEvacBridge == false) // Если не эвакуируется
+        // 2. Общая физика шага и анти-застревание
+        if (!u.onEvacBridge) {
+            subTimer.restart();
             stepUnitMovement(u, dt, buildings);
+            profStepMovementNs += subTimer.nsecsElapsed();
+        }
+    }
+
+    profTicks++;
+    if (profTicks >= PROFILE_INTERVAL_TICKS) {
+        auto toAvgMs = [&](qint64 ns) -> double {
+            return (static_cast<double>(ns) / profTicks) / 1'000'000.0;
+        };
+
+        qDebug().noquote() << QString(
+                                  "  --- peopleActions BREAKDOWN (avg/tick | C:%1 S:%2 Z:%3) ---")
+                                  .arg(countCitizens / profTicks)
+                                  .arg(countSoldiers / profTicks)
+                                  .arg(countZombies / profTicks)
+                           << QString("\n    2a. CitizenBehavior: %1 ms")
+                                  .arg(toAvgMs(profCitizenBehaviorNs), 0, 'f', 3)
+                           << QString("\n    2b. SoldierBehavior: %1 ms")
+                                  .arg(toAvgMs(profSoldierBehaviorNs), 0, 'f', 3)
+                           << QString("\n    2c. ZombieBehavior:  %1 ms")
+                                  .arg(toAvgMs(profZombieBehaviorNs), 0, 'f', 3)
+                           << QString("\n    2d. stepMovement:    %1 ms")
+                                  .arg(toAvgMs(profStepMovementNs), 0, 'f', 3);
+
+        profTicks = 0;
+        profCitizenBehaviorNs = 0;
+        profSoldierBehaviorNs = 0;
+        profZombieBehaviorNs = 0;
+        profStepMovementNs = 0;
+        countCitizens = 0;
+        countSoldiers = 0;
+        countZombies = 0;
     }
 }
 
@@ -789,17 +961,33 @@ void GameWorld::updateCitizenBehavior(Unit &u,
         // 2b. Зомби ломает дверь ИЛИ виден снаружи через открытый дверной проём → отходим вглубь здания
         bool seesZombieOutside = false;
         float outThreatX = 0.0f, outThreatY = 0.0f;
-        for (size_t zIdx : activeZombies) {
-            if (g_units[zIdx].insideBuildingId != -1)
+
+        int cCellX = std::clamp(static_cast<int>(u.x) / UNIT_GRID_CELL, 0, g_unitGridCols - 1);
+        int cCellY = std::clamp(static_cast<int>(u.y) / UNIT_GRID_CELL, 0, g_unitGridRows - 1);
+
+        for (int dy = -1; dy <= 1 && !seesZombieOutside; ++dy) {
+            int ny = cCellY + dy;
+            if (ny < 0 || ny >= g_unitGridRows)
                 continue;
-            float dx = g_units[zIdx].x - u.x;
-            float dy = g_units[zIdx].y - u.y;
-            if (dx * dx + dy * dy <= 45.0f * 45.0f
-                && hasLineOfSight(u.x, u.y, g_units[zIdx].x, g_units[zIdx].y)) {
-                seesZombieOutside = true;
-                outThreatX = g_units[zIdx].x;
-                outThreatY = g_units[zIdx].y;
-                break;
+
+            for (int dx = -1; dx <= 1 && !seesZombieOutside; ++dx) {
+                int nx = cCellX + dx;
+                if (nx < 0 || nx >= g_unitGridCols)
+                    continue;
+
+                for (size_t zIdx : g_zombieSpatialGrid[ny * g_unitGridCols + nx]) {
+                    if (g_units[zIdx].insideBuildingId != -1)
+                        continue;
+                    float ddx = g_units[zIdx].x - u.x;
+                    float ddy = g_units[zIdx].y - u.y;
+                    if (ddx * ddx + ddy * ddy <= 45.0f * 45.0f
+                        && hasLineOfSight(u.x, u.y, g_units[zIdx].x, g_units[zIdx].y)) {
+                        seesZombieOutside = true;
+                        outThreatX = g_units[zIdx].x;
+                        outThreatY = g_units[zIdx].y;
+                        break;
+                    }
+                }
             }
         }
 
@@ -852,17 +1040,32 @@ void GameWorld::updateCitizenBehavior(Unit &u,
     bool hasThreat = false;
     float threatX = 0.0f, threatY = 0.0f;
 
-    for (size_t zIdx : activeZombies) {
-        if (g_units[zIdx].insideBuildingId != -1)
-            continue; // видим только уличных зомби
-        float dx = g_units[zIdx].x - u.x;
-        float dy = g_units[zIdx].y - u.y;
-        if (dx * dx + dy * dy <= 45.0f * 45.0f
-            && hasLineOfSight(u.x, u.y, g_units[zIdx].x, g_units[zIdx].y)) {
-            hasThreat = true;
-            threatX = g_units[zIdx].x;
-            threatY = g_units[zIdx].y;
-            break;
+    int cCellX = std::clamp(static_cast<int>(u.x) / UNIT_GRID_CELL, 0, g_unitGridCols - 1);
+    int cCellY = std::clamp(static_cast<int>(u.y) / UNIT_GRID_CELL, 0, g_unitGridRows - 1);
+
+    for (int dy = -1; dy <= 1 && !hasThreat; ++dy) {
+        int ny = cCellY + dy;
+        if (ny < 0 || ny >= g_unitGridRows)
+            continue;
+
+        for (int dx = -1; dx <= 1 && !hasThreat; ++dx) {
+            int nx = cCellX + dx;
+            if (nx < 0 || nx >= g_unitGridCols)
+                continue;
+
+            for (size_t zIdx : g_zombieSpatialGrid[ny * g_unitGridCols + nx]) {
+                if (g_units[zIdx].insideBuildingId != -1)
+                    continue;
+                float ddx = g_units[zIdx].x - u.x;
+                float ddy = g_units[zIdx].y - u.y;
+                if (ddx * ddx + ddy * ddy <= 45.0f * 45.0f
+                    && hasLineOfSight(u.x, u.y, g_units[zIdx].x, g_units[zIdx].y)) {
+                    hasThreat = true;
+                    threatX = g_units[zIdx].x;
+                    threatY = g_units[zIdx].y;
+                    break;
+                }
+            }
         }
     }
 
@@ -927,43 +1130,57 @@ void GameWorld::updateZombieBehavior(Unit &u,
                                      const std::vector<size_t> &zombieTargets,
                                      bool &buildingsVisualDirty)
 {
-    // Задачи:
-    // 1. Преследовать и атаковать/заражать ближайшую видимую жертву
-    // 2. Иначе — waypoints / lastKnown / выход из здания / ломать дверь здания с людьми
-
     auto *rng = QRandomGenerator::global();
-    (void)dt;
+    (void) dt;
+    (void) zombieTargets;
 
     int bestTarget = -1;
     float bestDistSq = 75.0f * 75.0f;
 
-    for (size_t tIdx : zombieTargets) {
-        const auto &t = g_units[tIdx];
-        if (t.hp <= 0)
+    int zCellX = std::clamp(static_cast<int>(u.x) / UNIT_GRID_CELL, 0, g_unitGridCols - 1);
+    int zCellY = std::clamp(static_cast<int>(u.y) / UNIT_GRID_CELL, 0, g_unitGridRows - 1);
+
+    // Поиск ближайшей видимой жертвы через пространственную сетку 3x3
+    for (int dy = -1; dy <= 1; ++dy) {
+        int ny = zCellY + dy;
+        if (ny < 0 || ny >= g_unitGridRows)
             continue;
 
-        bool sameBuilding = (u.insideBuildingId != -1 && u.insideBuildingId == t.insideBuildingId);
-        bool canSee = sameBuilding
-                      || (u.insideBuildingId == -1 && t.insideBuildingId == -1
-                          && hasLineOfSight(u.x, u.y, t.x, t.y));
-        if (!canSee)
-            continue;
+        for (int dx = -1; dx <= 1; ++dx) {
+            int nx = zCellX + dx;
+            if (nx < 0 || nx >= g_unitGridCols)
+                continue;
 
-        float dx = t.x - u.x;
-        float dy = t.y - u.y;
-        float dSq = dx * dx + dy * dy;
-        if (dSq < bestDistSq) {
-            bestDistSq = dSq;
-            bestTarget = static_cast<int>(tIdx);
+            for (size_t tIdx : g_targetSpatialGrid[ny * g_unitGridCols + nx]) {
+                const auto &t = g_units[tIdx];
+                if (t.hp <= 0)
+                    continue;
+
+                bool sameBuilding = (u.insideBuildingId != -1
+                                     && u.insideBuildingId == t.insideBuildingId);
+                if (!sameBuilding && (u.insideBuildingId != -1 || t.insideBuildingId != -1))
+                    continue;
+
+                float ddx = t.x - u.x;
+                float ddy = t.y - u.y;
+                float dSq = ddx * ddx + ddy * ddy;
+
+                if (dSq >= bestDistSq)
+                    continue;
+
+                if (sameBuilding || hasLineOfSight(u.x, u.y, t.x, t.y)) {
+                    bestDistSq = dSq;
+                    bestTarget = static_cast<int>(tIdx);
+                }
+            }
         }
     }
 
-    // 1. Есть жертва
+    // 1. Есть жертва — преследуем / атакуем / заражаем
     if (bestTarget != -1) {
         float tx = g_units[bestTarget].x;
         float ty = g_units[bestTarget].y;
 
-        // Если зомби внутри здания, а жертва на улице — сначала выходим по тропинке наружу
         if (u.insideBuildingId >= 0 && u.insideBuildingId < static_cast<int>(buildings.size())
             && g_units[bestTarget].insideBuildingId != u.insideBuildingId) {
             if (u.waypoints.empty()) {
@@ -1009,7 +1226,6 @@ void GameWorld::updateZombieBehavior(Unit &u,
             u.vx = (dx / d) * ZOMBIE_CHASE_SPEED;
             u.vy = (dy / d) * ZOMBIE_CHASE_SPEED;
         } else {
-            // Цель видна через тротуар, но напрямую пройти нельзя — обходим по графу дорог
             if (u.waypoints.empty()
                 || distanceBetween(u.waypoints.back().x() - tx, u.waypoints.back().y() - ty)
                        > 25.0f) {
@@ -1091,20 +1307,36 @@ void GameWorld::updateZombieBehavior(Unit &u,
         return;
     }
 
-    // 5. На улице — ищем здание с людьми и ломаем дверь
+    // 5. На улице — ищем здание с людьми через пространственную сетку 3x3 и ломаем дверь
     int bestBldg = -1;
     float bestBldgDistSq = 75.0f * 75.0f;
-    for (const auto &b : buildings) {
-        if (b.currentOccupants > 0 && b.health > 0 && !b.isBurning && !b.isBurnedOut) {
-            QPointF targetPt = !b.pathFromRoad.empty() ? b.doorCenter : QPointF(b.cx, b.cy);
-            float bx = static_cast<float>(targetPt.x());
-            float by = static_cast<float>(targetPt.y());
-            float dx = bx - u.x;
-            float dy = by - u.y;
-            float dSq = dx * dx + dy * dy;
-            if (dSq < bestBldgDistSq && hasLineOfSight(u.x, u.y, bx, by)) {
-                bestBldgDistSq = dSq;
-                bestBldg = b.id;
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        int ny = zCellY + dy;
+        if (ny < 0 || ny >= g_unitGridRows)
+            continue;
+
+        for (int dx = -1; dx <= 1; ++dx) {
+            int nx = zCellX + dx;
+            if (nx < 0 || nx >= g_unitGridCols)
+                continue;
+
+            for (int bId : g_buildingSpatialGrid[ny * g_unitGridCols + nx]) {
+                const auto &b = buildings[bId];
+                if (b.currentOccupants <= 0 || b.health <= 0 || b.isBurning || b.isBurnedOut)
+                    continue;
+
+                QPointF targetPt = !b.pathFromRoad.empty() ? b.doorCenter : QPointF(b.cx, b.cy);
+                float bx = static_cast<float>(targetPt.x());
+                float by = static_cast<float>(targetPt.y());
+                float ddx = bx - u.x;
+                float ddy = by - u.y;
+                float dSq = ddx * ddx + ddy * ddy;
+
+                if (dSq < bestBldgDistSq && hasLineOfSight(u.x, u.y, bx, by)) {
+                    bestBldgDistSq = dSq;
+                    bestBldg = b.id;
+                }
             }
         }
     }
@@ -1119,7 +1351,6 @@ void GameWorld::updateZombieBehavior(Unit &u,
         float d = std::sqrt(bestBldgDistSq);
 
         if (d <= 5.0f) {
-            // Ломаем дверь, внутрь не заходим
             u.vx = 0.0f;
             u.vy = 0.0f;
             if (u.attackCooldownSec <= 0.0f) {
@@ -1138,9 +1369,11 @@ void GameWorld::updateZombieBehavior(Unit &u,
                         if (occupant.insideBuildingId == b.id) {
                             occupant.panicTimerSec = 3.0f;
                             occupant.state = UnitState::Walking;
+
                             occupant.stateTimerSec = 8.0f;
                             occupant.waypoints.clear();
-                            for (int pIdx = static_cast<int>(b.pathFromRoad.size()) - 1; pIdx >= 0; --pIdx)
+                            for (int pIdx = static_cast<int>(b.pathFromRoad.size()) - 1; pIdx >= 0;
+                                 --pIdx)
                                 occupant.waypoints.push_back(b.pathFromRoad[pIdx]);
                         }
                     }
@@ -1152,7 +1385,6 @@ void GameWorld::updateZombieBehavior(Unit &u,
         }
         return;
     }
-
     // 6. Бродяжничество
     if (rng->bounded(100) < 4) {
         float angle = static_cast<float>(rng->generateDouble() * 6.28318);

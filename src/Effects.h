@@ -70,9 +70,6 @@ void GameWorld::spawnBurstParticles(float x, float y, int count, uint8_t r, uint
 void GameWorld::updateEffects(float dt)
 {
     g_effectsGeometry.clear();
-
-    rebuildBurningLights();
-
     // Обновляем пули, волны и искры
     for (size_t i = 0; i < g_particles.size();) {
         auto &p = g_particles[i];

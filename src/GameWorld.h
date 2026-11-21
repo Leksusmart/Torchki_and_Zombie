@@ -95,10 +95,10 @@ private: // функции
     bool moveSoldierOnEvacBridge(Unit &u, float dt);
     int findSafestEvacExit(const Unit &u, const std::vector<size_t> &activeZombies) const;
     void applySoldierEvacAvoidance(Unit &u, const std::vector<size_t> &activeZombies);
-    int findSoldierFireTarget(const Unit &u, const std::vector<size_t> &activeZombies) const;
+    int findSoldierFireTarget(const Unit &u) const;
     void fireAtTarget(Unit &soldier, size_t targetIdx);
     void adjustSoldierCombatPosition(Unit &u, float targetX, float targetY, float dist);
-    int findSoldierHuntTarget(const Unit &u, const std::vector<size_t> &activeZombies) const;
+    int findSoldierHuntTarget(const Unit &u) const;
     void routeSoldierToTarget(Unit &u, const Unit &target);
     bool followSoldierWaypoints(Unit &u);
     void patrolSoldier(Unit &u, const std::vector<BuildingObject> &buildings);
@@ -162,9 +162,11 @@ private: // переменные
     int g_gridRows = 0;
     int g_nextUnitId = 1;
     int g_selectedUnitId = -1;
-
+    int g_unitGridCols = 0;
+    int g_unitGridRows = 0;
     int g_speedMultiplier = 1;
     int g_selectedTool = 0;
+
     float g_elapsedSimSec = 0.0f;
     float g_timeOfDayHours = 7.5f;
     double g_budget = 300.0;
@@ -179,6 +181,7 @@ private: // переменные
     static constexpr float ZOMBIE_CHASE_SPEED = RUN_SPEED
                                                 * 1.15F; // 115% от скорости бега жителя (21 * 1.15)
     static constexpr double TAX_PER_WORKER_SEC = 0.005F;
+    static constexpr int UNIT_GRID_CELL = 80; // Радиус обзора зомби = 75м
 
     QVariantList g_helicoptersList;
     QVariantList g_dropZonesList;
@@ -191,6 +194,10 @@ private: // переменные
     QVariantMap g_selectedUnitInfo;
     QVariantMap g_selectedBuildingInfo;
 
+    std::vector<std::vector<size_t>> g_targetSpatialGrid; // Сетка целей для зомби (zombieTargets)
+    std::vector<std::vector<size_t>> g_zombieSpatialGrid; // Сетка активных зомби (для жителей и солдат)
+    std::vector<std::vector<int>>
+        g_buildingSpatialGrid; // Статичная сетка зданий (строится 1 раз при старте)
     std::vector<size_t> activeZombies;
     std::vector<size_t> panickingOutdoors;
     std::vector<size_t> zombieTargets;

@@ -31,7 +31,7 @@ bool GameWorld::updateSoldierEvacuation(Unit &u,
         return moveSoldierOnEvacBridge(u, dt);
 
     // 3. Стрельба по врагам в радиусе огня на ходу
-    int fireTargetIdx = findSoldierFireTarget(u, activeZombies);
+    int fireTargetIdx = findSoldierFireTarget(u);
     if (fireTargetIdx != -1) {
         u.targetUnitId = g_units[fireTargetIdx].id;
         fireAtTarget(u, static_cast<size_t>(fireTargetIdx));
@@ -118,12 +118,16 @@ void GameWorld::updateSoldierBehavior(Unit &u,
     // 4. Иначе — идти по дорожным узлам (или по тропинке в здание) к ближайшему зомби/инфицированному
     // 5. Если целей на карте нет — двигаться по текущим waypoints или патрулировать
 
+    // запрет на частую смену маршрута
+    if (u.repathCooldownSec > 0.0F)
+        u.repathCooldownSec = std::max(0.0F, u.repathCooldownSec - dt);
+
     // 1. Проверка 90 секунд службы и эвакуация
     if (updateSoldierEvacuation(u, dt, buildings, activeZombies))
         return;
 
     // 2. Поиск цели в радиусе выстрела (35м, сквозь тротуары, но не через стены зданий)
-    int fireTargetIdx = findSoldierFireTarget(u, activeZombies);
+    int fireTargetIdx = findSoldierFireTarget(u);
     if (fireTargetIdx != -1) {
         const Unit &target = g_units[fireTargetIdx];
         float dist = distanceBetween(target.x - u.x, target.y - u.y);
@@ -141,7 +145,7 @@ void GameWorld::updateSoldierBehavior(Unit &u,
     }
 
     // 4. Поиск глобальной цели для преследования (сначала зомби, если их нет — инфицированные)
-    int huntTargetIdx = findSoldierHuntTarget(u, activeZombies);
+    int huntTargetIdx = findSoldierHuntTarget(u);
     if (huntTargetIdx != -1) {
         const Unit &huntTarget = g_units[huntTargetIdx];
         routeSoldierToTarget(u, huntTarget);
@@ -294,7 +298,7 @@ void GameWorld::applySoldierEvacAvoidance(Unit &u, const std::vector<size_t> &ac
     }
 }
 
-int GameWorld::findSoldierFireTarget(const Unit &u, const std::vector<size_t> &activeZombies) const
+int GameWorld::findSoldierFireTarget(const Unit &u) const
 {
     // Задачи:
     // 1. Найти ближайшего видимого зомби в радиусе выстрела (35м)
@@ -314,18 +318,34 @@ int GameWorld::findSoldierFireTarget(const Unit &u, const std::vector<size_t> &a
     int bestZombie = -1;
     float bestZombieDistSq = shootRadiusSq;
 
-    // 1. Видимые зомби
-    for (size_t zIdx : activeZombies) {
-        const Unit &z = g_units[zIdx];
-        if (z.hp <= 0 || !canShootTarget(z))
-            continue;
+    int sCellX = std::clamp(static_cast<int>(u.x) / UNIT_GRID_CELL, 0, g_unitGridCols - 1);
+    int sCellY = std::clamp(static_cast<int>(u.y) / UNIT_GRID_CELL, 0, g_unitGridRows - 1);
 
-        float dx = z.x - u.x;
-        float dy = z.y - u.y;
-        float dSq = dx * dx + dy * dy;
-        if (dSq < bestZombieDistSq) {
-            bestZombieDistSq = dSq;
-            bestZombie = static_cast<int>(zIdx);
+    for (int dy = -1; dy <= 1; ++dy) {
+        int ny = sCellY + dy;
+        if (ny < 0 || ny >= g_unitGridRows)
+            continue;
+        for (int dx = -1; dx <= 1; ++dx) {
+            int nx = sCellX + dx;
+            if (nx < 0 || nx >= g_unitGridCols)
+                continue;
+
+            for (size_t zIdx : g_zombieSpatialGrid[ny * g_unitGridCols + nx]) {
+                const Unit &z = g_units[zIdx];
+                if (z.hp <= 0)
+                    continue;
+
+                float ddx = z.x - u.x;
+                float ddy = z.y - u.y;
+                float dSq = ddx * ddx + ddy * ddy;
+                if (dSq >= bestZombieDistSq)
+                    continue;
+
+                if (u.insideBuildingId != -1) {
+                    bestZombieDistSq = dSq;
+                    bestZombie = static_cast<int>(zIdx);
+                }
+            }
         }
     }
 
@@ -390,7 +410,7 @@ void GameWorld::routeSoldierToTarget(Unit &u, const Unit &target)
         QPointF lastPt = u.waypoints.back();
         float targetShift = distanceBetween(static_cast<float>(lastPt.x()) - target.x,
                                             static_cast<float>(lastPt.y()) - target.y);
-        if (targetShift <= 20.0F) {
+        if (targetShift <= 20.0F || u.repathCooldownSec > 0.0F) {
             if (target.insideBuildingId == -1) {
                 u.waypoints.back() = QPointF(target.x, target.y);
             }
@@ -398,10 +418,9 @@ void GameWorld::routeSoldierToTarget(Unit &u, const Unit &target)
         }
     }
 
-    // 1. Строим путь
+    // 2. Строим путь
+    u.repathCooldownSec = 0.35F; // Запрещаем повторный вызов Дейкстры в течение 0.35с
     std::vector<QPointF> newPath = buildPathBetween(u.x, u.y, target.x, target.y);
-
-    // 2. Отбрасываем первый узел, если он позади солдата
 
     // 3. Если солдат на улице — отбрасываем первый узел, если он позади солдата
     if (u.insideBuildingId == -1 && newPath.size() >= 2) {
@@ -444,36 +463,49 @@ void GameWorld::fireAtTarget(Unit &soldier, size_t targetIdx)
     }
 }
 
-int GameWorld::findSoldierHuntTarget(const Unit &u, const std::vector<size_t> &activeZombies) const
+int GameWorld::findSoldierHuntTarget(const Unit &u) const
 {
     // Задачи:
     // 1. Найти ближайшего живого зомби на карте
     // 2. Если зомби уничтожены — найти ближайшего инфицированного жителя
 
     int bestIdx = -1;
-    float bestDistSq = 1e18F;
+    float bestDistSq = 300.0F * 300.0F; // Ищем только в радиусе 300м
 
-    // 1. Приоритет: живые зомби в радиусе 300м
-    for (size_t zIdx : activeZombies) {
-        const Unit &z = g_units[zIdx];
-        if (z.hp <= 0)
+    int sCellX = std::clamp(static_cast<int>(u.x) / UNIT_GRID_CELL, 0, g_unitGridCols - 1);
+    int sCellY = std::clamp(static_cast<int>(u.y) / UNIT_GRID_CELL, 0, g_unitGridRows - 1);
+
+    // 1. Быстрый поиск ближайшего зомби в сетке 5x5 ячеек (~400м)
+    for (int dy = -2; dy <= 2; ++dy) {
+        int ny = sCellY + dy;
+        if (ny < 0 || ny >= g_unitGridRows)
             continue;
-        float dx = z.x - u.x;
-        float dy = z.y - u.y;
-        float dSq = dx * dx + dy * dy;
-        if (dSq < bestDistSq) {
-            bestDistSq = dSq;
-            bestIdx = static_cast<int>(zIdx);
+        for (int dx = -2; dx <= 2; ++dx) {
+            int nx = sCellX + dx;
+            if (nx < 0 || nx >= g_unitGridCols)
+                continue;
+
+            for (size_t zIdx : g_zombieSpatialGrid[ny * g_unitGridCols + nx]) {
+                const Unit &z = g_units[zIdx];
+                if (z.hp <= 0)
+                    continue;
+
+                float ddx = z.x - u.x;
+                float ddy = z.y - u.y;
+                float dSq = ddx * ddx + ddy * ddy;
+                if (dSq < bestDistSq) {
+                    bestDistSq = dSq;
+                    bestIdx = static_cast<int>(zIdx);
+                }
+            }
         }
     }
-    if (bestIdx != -1) {
-        float distToZombie = static_cast<float>(
-            distanceBetween(g_units[bestIdx].x - u.x, g_units[bestIdx].y - u.y));
-        if (distToZombie < 300)
-            return bestIdx;
-    }
 
-    // 2. Если зомби нет — охота на инфицированных жителей
+    if (bestIdx != -1)
+        return bestIdx;
+
+    // 2. Если зомби рядом нет — охота на инфицированных жителей
+    float bestInfDistSq = 1e18F;
     for (size_t i = 0; i < g_units.size(); ++i) {
         const Unit &cand = g_units[i];
         if (cand.hp <= 0 || cand.type != UnitType::Citizen || !cand.isInfected)
@@ -481,8 +513,8 @@ int GameWorld::findSoldierHuntTarget(const Unit &u, const std::vector<size_t> &a
         float dx = cand.x - u.x;
         float dy = cand.y - u.y;
         float dSq = dx * dx + dy * dy;
-        if (dSq < bestDistSq) {
-            bestDistSq = dSq;
+        if (dSq < bestInfDistSq) {
+            bestInfDistSq = dSq;
             bestIdx = static_cast<int>(i);
         }
     }
