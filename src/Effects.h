@@ -89,7 +89,7 @@ void GameWorld::updateEffects(float dt)
         if (p.isLine) {
             float dx = p.x2 - p.x;
             float dy = p.y2 - p.y;
-            float len = std::hypot(dx, dy);
+            float len = distanceBetween(dx, dy);
             float angle = std::atan2(dy, dx);
             g_effectsGeometry.push_back(
                 {(p.x + p.x2) * 0.5f, (p.y + p.y2) * 0.5f, len, p.size, angle, p.r, p.g, p.b, alpha});

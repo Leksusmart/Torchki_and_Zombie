@@ -29,6 +29,7 @@ public:
         return g_buildingOverlaysGeometry;
     }
     const std::vector<RenderQuad> &effectsGeometry() const { return g_effectsGeometry; }
+    const std::vector<RenderQuad> &selectedPathGeometry() const { return g_selectedPathGeometry; }
 
 signals:
     void outbreakOccurred(float x, float y, int outbreakIndex);
@@ -56,6 +57,8 @@ private: // функции
     void spawnParatrooperSquad(QPointF dropPos);
     void rebuildHelicoptersRenderData();
     void updateSelectedUnitInfo(bool logDebug = false);
+    void rebuildSelectedUnitPathGeometry();
+
     QString buildingDisplayName(int buildingId) const;
     QString unitStateDisplayName(const Unit &u) const;
     QString unitDisplayName(int unitId) const;
@@ -96,14 +99,12 @@ private: // функции
     void fireAtTarget(Unit &soldier, size_t targetIdx);
     void adjustSoldierCombatPosition(Unit &u, float targetX, float targetY, float dist);
     int findSoldierHuntTarget(const Unit &u, const std::vector<size_t> &activeZombies) const;
-    void routeSoldierToTarget(Unit &u,
-                              const Unit &target,
-                              const std::vector<BuildingObject> &buildings);
+    void routeSoldierToTarget(Unit &u, const Unit &target);
     bool followSoldierWaypoints(Unit &u);
     void patrolSoldier(Unit &u, const std::vector<BuildingObject> &buildings);
 
     // Ai.h
-    void updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObject> &buildings);
+    void updateCitizenSchedule(Unit &u, std::vector<BuildingObject> &buildings);
     void infectUnit(Unit &u, bool immediateZombie = false);
     void applyWallRepulsion(Unit &u, float dt);
     void applyFireAvoidanceAndDamage(Unit &u,
@@ -124,7 +125,10 @@ private: // функции
     // Navigation.h
     bool hasLineOfSight(float x1, float y1, float x2, float y2) const;
     std::vector<QPointF> buildPathBetween(QPointF startPos, QPointF endPos) const;
-    std::vector<QPointF> buildPathToBuilding(QPointF startPos, const BuildingObject &b) const;
+    std::vector<QPointF> buildPathBetween(float startPosX,
+                                          float startPosY,
+                                          float endPosX,
+                                          float endPosY) const;
     int findNearestAvailableBuilding(float x, float y, bool wantWorkplace) const;
     int findNearestRoadNode(float x, float y) const;
     bool isWalkable(float x, float y) const;
@@ -132,6 +136,7 @@ private: // функции
     QPointF findNearestWalkable(float x, float y, float maxRadius = 40.0F) const;
     void buildRoadGraphCache();
     bool hasWalkableLineOfSight(float x1, float y1, float x2, float y2) const;
+    float distanceBetween(float x, float y) const { return std::hypot(x, y); };
 
 private: // переменные
     LevelDefinition g_currentLevel;
@@ -184,6 +189,10 @@ private: // переменные
     QVariantMap g_selectedUnitInfo;
     QVariantMap g_selectedBuildingInfo;
 
+    std::vector<size_t> activeZombies;
+    std::vector<size_t> panickingOutdoors;
+    std::vector<size_t> zombieTargets;
+    std::vector<uint8_t> prevRoofOpen;
     std::vector<DropHelicopter> g_helicopters;
     std::vector<std::vector<int>>
         g_nodeSpatialGrid; // Пространственная сетка узлов дорог для мгновенного поиска startNode
@@ -192,6 +201,7 @@ private: // переменные
     std::vector<Unit> g_units;
     std::vector<EffectParticle> g_particles;
     std::vector<RenderQuad> g_effectsGeometry;
+    std::vector<RenderQuad> g_selectedPathGeometry;
     std::vector<ActiveEvacuation> g_evacs;
     std::vector<RenderQuad> g_buildingOverlaysGeometry;
     std::vector<RenderQuad> g_buildingsGeometry;

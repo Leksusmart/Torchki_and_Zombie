@@ -40,6 +40,7 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     QSGNode *rootNode = oldNode;
     QSGSimpleTextureNode *bgNode = nullptr;
     QSGGeometryNode *buildingsNode = nullptr;
+    QSGGeometryNode *pathNode = nullptr;
     QSGGeometryNode *unitsNode = nullptr;
     QSGGeometryNode *overlaysNode = nullptr;
     QSGGeometryNode *effectsNode = nullptr;
@@ -47,7 +48,7 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     if (!rootNode) {
         rootNode = new QSGNode();
 
-        // Узел 0: Текстура фона (море, парки, проложенные дороги)
+        // Узел 0: Текстура фона
         bgNode = new QSGSimpleTextureNode();
         bgNode->setOwnsTexture(true);
         rootNode->appendChildNode(bgNode);
@@ -61,17 +62,25 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         buildingsNode->setMaterial(new QSGVertexColorMaterial());
         rootNode->appendChildNode(buildingsNode);
 
-        // Узел 2: Юниты
+        // Узел 2: Маршрут выбранного юнита
+        pathNode = new QSGGeometryNode();
+        auto *pGeom = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0);
+        pGeom->setDrawingMode(QSGGeometry::DrawTriangles);
+        pathNode->setGeometry(pGeom);
+        pathNode->setFlags(QSGNode::OwnsGeometry | QSGNode::OwnsMaterial);
+        pathNode->setMaterial(new QSGVertexColorMaterial());
+        rootNode->appendChildNode(pathNode);
+
+        // Узел 3: Юниты
         unitsNode = new QSGGeometryNode();
         auto *uGeom = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0);
-        uGeom->setDrawingMode(
-            QSGGeometry::DrawTriangles); // TODO: DrawPoints при scale < 1 else DrawTriangles
+        uGeom->setDrawingMode(QSGGeometry::DrawTriangles);
         unitsNode->setGeometry(uGeom);
         unitsNode->setFlags(QSGNode::OwnsGeometry | QSGNode::OwnsMaterial);
         unitsNode->setMaterial(new QSGVertexColorMaterial());
         rootNode->appendChildNode(unitsNode);
 
-        // Узел 3: Оверлеи (полоски заполненности и здоровья зданий)
+        // Узел 4: Оверлеи
         overlaysNode = new QSGGeometryNode();
         auto *oGeom = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0);
         oGeom->setDrawingMode(QSGGeometry::DrawTriangles);
@@ -80,7 +89,7 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         overlaysNode->setMaterial(new QSGVertexColorMaterial());
         rootNode->appendChildNode(overlaysNode);
 
-        // Узел 4: Партиклы
+        // Узел 5: Партиклы
         effectsNode = new QSGGeometryNode();
         auto *eGeom = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0);
         eGeom->setDrawingMode(QSGGeometry::DrawTriangles);
@@ -91,9 +100,10 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     } else {
         bgNode = static_cast<QSGSimpleTextureNode *>(rootNode->childAtIndex(0));
         buildingsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(1));
-        unitsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(2));
-        overlaysNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(3));
-        effectsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(4));
+        pathNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(2));
+        unitsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(3));
+        overlaysNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(4));
+        effectsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(5));
     }
 
     if (g_mapDirty) {
@@ -108,6 +118,9 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     }
 
     if (g_unitsDirty) {
+        fillGeometry(pathNode->geometry(), g_world->selectedPathGeometry());
+        pathNode->markDirty(QSGNode::DirtyGeometry);
+
         fillCircleGeometry(unitsNode->geometry(), g_world->unitGeometry(), 10);
         unitsNode->markDirty(QSGNode::DirtyGeometry);
 

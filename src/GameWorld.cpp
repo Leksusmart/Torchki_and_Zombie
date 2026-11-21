@@ -21,7 +21,9 @@ GameWorld::GameWorld(QObject *parent)
     startLevel(defaultCfg);
 
     connect(&g_timer, &QTimer::timeout, this, &GameWorld::tick);
-    g_timer.start(16);
+
+    int targetFPS = 60;
+    g_timer.start(static_cast<int>(1000 / targetFPS));
 }
 
 void GameWorld::startLevel(const LevelConfig &config)
@@ -403,7 +405,7 @@ void GameWorld::tick()
         return;
 
     auto *rng = QRandomGenerator::global();
-    const float dt = 0.016f * g_speedMultiplier;
+    const double dt = 0.016f * g_speedMultiplier;
     const float dtHours = dt * g_currentConfig.gameHoursPerSec;
 
     // 1. Время и бюджет
@@ -437,10 +439,8 @@ void GameWorld::tick()
     int mapW = g_generator.width();
     int mapH = g_generator.height();
     int currentHourIdx = static_cast<int>(g_timeOfDayHours) % 24;
-
-    for (auto &b : buildings) {
+    for (auto &b : buildings)
         b.currentOccupants = 0;
-    }
     for (auto &u : g_units) {
         int gx = std::clamp(static_cast<int>(u.x), 0, mapW - 1);
         int gy = std::clamp(static_cast<int>(u.y), 0, mapH - 1);
@@ -467,7 +467,7 @@ void GameWorld::tick()
     // 4. Таймеры зданий (атака / горение)
     for (auto &b : buildings) {
         if (b.underAttackTimerSec > 0.0f) {
-            b.underAttackTimerSec = std::max(0.0f, b.underAttackTimerSec - dt);
+            b.underAttackTimerSec = std::max(0.0f, static_cast<float>(b.underAttackTimerSec - dt));
         }
         if (b.isBurning) {
             b.burnTimerSec -= dt;
@@ -511,9 +511,9 @@ void GameWorld::tick()
     }
 
     // 6. Списки активных целей
-    std::vector<size_t> activeZombies;
-    std::vector<size_t> panickingOutdoors;
-    std::vector<size_t> zombieTargets;
+    activeZombies.clear();
+    panickingOutdoors.clear();
+    zombieTargets.clear();
 
     for (size_t i = 0; i < g_units.size(); ++i) {
         const auto &u = g_units[i];
@@ -533,7 +533,8 @@ void GameWorld::tick()
     }
 
     // Сохраняем состояние занятости зданий (пусто / есть люди) до шага симуляции
-    std::vector<uint8_t> prevRoofOpen(buildings.size(), 0);
+    if (prevRoofOpen.empty())
+        prevRoofOpen.resize(buildings.size(), 0);
     for (size_t i = 0; i < buildings.size(); ++i) {
         prevRoofOpen[i] = (buildings[i].currentOccupants > 0) ? 1 : 0;
     }
@@ -541,12 +542,11 @@ void GameWorld::tick()
     peopleUpdateActions(dt, buildings, activeZombies, panickingOutdoors, zombieTargets,
                         buildingsVisualDirty);
 
-    // обновляем currentOccupants по актуальным координатам
+    // обновляем состояние занятости зданий по актуальным координатам
     for (auto &b : buildings) {
         b.currentOccupants = 0;
         b.reservedOccupants = 0;
     }
-
     for (auto &u : g_units) {
         int gx = std::clamp(static_cast<int>(u.x), 0, mapW - 1);
         int gy = std::clamp(static_cast<int>(u.y), 0, mapH - 1);
@@ -570,7 +570,7 @@ void GameWorld::tick()
         }
     }
 
-    // Теперь сравнение покажет реальное изменение (вошёл первый человек или вышел последний)
+    // Открываем крыши если кто-то вошёл
     for (size_t i = 0; i < buildings.size(); ++i) {
         uint8_t currOpen = (buildings[i].currentOccupants > 0) ? 1 : 0;
         if (currOpen != prevRoofOpen[i]) {
@@ -578,7 +578,6 @@ void GameWorld::tick()
             break;
         }
     }
-
     if (buildingsVisualDirty) {
         buildBuildingsGeometry();
         emit mapUpdated();
@@ -607,7 +606,8 @@ void GameWorld::tick()
     updateEffects(dt);
     updateHelicopters(dt);
     updateEvacuations(dt);
-    // Постоянный призыв на эвакуацию всех жителей (на улице и внутри зданий), оказавшихся в радиусе 100м
+
+    // Постоянный призыв на эвакуацию всех жителей, оказавшихся в радиусе 100м
     for (const auto &ev : g_evacs) {
         if (ev.completed)
             continue; // Когда 50 мест заняты или 30с вышли, новых больше не зовём
@@ -619,33 +619,17 @@ void GameWorld::tick()
                 && u.targetBuildingId == ev.evacNodeId)
                 continue; // Уже бежит на эту эвакуацию
 
-            float ux = u.x, uy = u.y;
-            if (u.insideBuildingId >= 0 && u.insideBuildingId < static_cast<int>(buildings.size())) {
-                ux = buildings[u.insideBuildingId].cx;
-                uy = buildings[u.insideBuildingId].cy;
-            }
-
-            float dx = ux - static_cast<float>(ev.evacPos.x());
-            float dy = uy - static_cast<float>(ev.evacPos.y());
-            if (dx * dx + dy * dy <= 100.0F * 100.0F) {
-                if (u.panicTimerSec > 0.0F) {
+            //
+            float dx = u.x - static_cast<float>(ev.evacPos.x());
+            float dy = u.y - static_cast<float>(ev.evacPos.y());
+            if (dx * dx + dy * dy <= 250.0F * 250.0F) { // Если попадает юнит в радиус эвакуации
+                if (u.panicTimerSec > 0.0F)
                     u.state = UnitState::PanicEvacuating;
-                } else {
+                else
                     u.state = UnitState::Evacuating;
-                }
+
                 u.targetBuildingId = ev.evacNodeId;
                 u.waypoints = buildPathBetween(QPointF(u.x, u.y), ev.evacPos);
-
-                // Если юнит был внутри здания — сначала выводим его по тропинке наружу
-                int bId = u.insideBuildingId;
-                if (bId >= 0 && bId < static_cast<int>(buildings.size())) {
-                    const auto &b = buildings[bId];
-                    std::vector<QPointF> exitPts;
-                    for (int p = static_cast<int>(b.pathFromRoad.size()) - 1; p >= 0; --p) {
-                        exitPts.push_back(b.pathFromRoad[p]);
-                    }
-                    u.waypoints.insert(u.waypoints.begin(), exitPts.begin(), exitPts.end());
-                }
             }
         }
     }
@@ -682,6 +666,7 @@ void GameWorld::peopleUpdateActions(float dt,
             continue;
 
         // 1. Поведение по типу
+        u.stateTimerSec -= dt;
         if (u.type == UnitType::Citizen || u.type == UnitType::Vaccinated) {
             updateCitizenBehavior(u, i, dt, buildings, activeZombies, panickingOutdoors);
         } else if (u.type == UnitType::Soldier) {
@@ -707,24 +692,20 @@ void GameWorld::updateCitizenBehavior(Unit &u,
     // 1. Эвакуация (приоритет)
     // 2. Поведение внутри здания (пожар / зомби внутри / атака двери / расписание)
     // 3. Поведение на улице (угроза зомби / паника толпы / расписание)
-
-    auto *rng = QRandomGenerator::global();
     const auto &walkGrid = g_generator.walkGrid();
+    auto *rng = QRandomGenerator::global();
     const int mapW = g_generator.width();
     const int mapH = g_generator.height();
 
-    const bool isInside = (u.insideBuildingId >= 0
-                           && u.insideBuildingId < static_cast<int>(buildings.size()));
-
     // 1. Эвакуация всегда в приоритете
     if (u.state == UnitState::Evacuating || u.state == UnitState::PanicEvacuating) {
-        u.panicTimerSec = 0.0f;
-        updateCitizenSchedule(u, dt, buildings);
+        updateCitizenSchedule(u, buildings);
         return;
     }
-
+    const bool isInsideBuilding = (u.insideBuildingId >= 0
+                                   && u.insideBuildingId < static_cast<int>(buildings.size()));
     // 2. Внутри здания
-    if (isInside) {
+    if (isInsideBuilding) {
         const auto &b = buildings[u.insideBuildingId];
 
         bool zombieInsideRoom = false;
@@ -751,7 +732,7 @@ void GameWorld::updateCitizenBehavior(Unit &u,
                 QPointF target = u.waypoints.front();
                 float dx = static_cast<float>(target.x()) - u.x;
                 float dy = static_cast<float>(target.y()) - u.y;
-                float dist = std::hypot(dx, dy);
+                float dist = distanceBetween(dx, dy);
                 if (dist < 1.5f) {
                     u.waypoints.erase(u.waypoints.begin());
                 } else {
@@ -767,7 +748,7 @@ void GameWorld::updateCitizenBehavior(Unit &u,
                         continue;
                     float zx = u.x - g_units[zIdx].x;
                     float zy = u.y - g_units[zIdx].y;
-                    float zDist = std::hypot(zx, zy);
+                    float zDist = distanceBetween(zx, zy);
                     if (zDist <= 16.0f && zDist > 0.1f) {
                         float weight = (16.0f - zDist) / 16.0f;
                         avoidX += (zx / zDist) * weight * 1.3f;
@@ -778,7 +759,7 @@ void GameWorld::updateCitizenBehavior(Unit &u,
 
             float finalX = routeDirX * 1.3f + avoidX;
             float finalY = routeDirY * 1.3f + avoidY;
-            float finalLen = std::hypot(finalX, finalY);
+            float finalLen = distanceBetween(finalX, finalY);
             if (finalLen > 0.01f) {
                 u.vx = (finalX / finalLen) * RUN_SPEED;
                 u.vy = (finalY / finalLen) * RUN_SPEED;
@@ -786,20 +767,47 @@ void GameWorld::updateCitizenBehavior(Unit &u,
             return;
         }
 
-        // 2b. Зомби ломает дверь снаружи → паникуем внутри, не выходим
-        if (b.underAttackTimerSec > 0.0f) {
-            u.panicTimerSec = 1.5f;
+        // 2b. Зомби ломает дверь ИЛИ виден снаружи через открытый дверной проём → отходим вглубь здания
+        bool seesZombieOutside = false;
+        float outThreatX = 0.0f, outThreatY = 0.0f;
+        for (size_t zIdx : activeZombies) {
+            if (g_units[zIdx].insideBuildingId != -1)
+                continue;
+            float dx = g_units[zIdx].x - u.x;
+            float dy = g_units[zIdx].y - u.y;
+            if (dx * dx + dy * dy <= 45.0f * 45.0f
+                && hasLineOfSight(u.x, u.y, g_units[zIdx].x, g_units[zIdx].y)) {
+                seesZombieOutside = true;
+                outThreatX = g_units[zIdx].x;
+                outThreatY = g_units[zIdx].y;
+                break;
+            }
+        }
+
+        if (b.underAttackTimerSec > 0.0f || seesZombieOutside) {
+            u.panicTimerSec = 2.0f;
             u.waypoints.clear();
 
             float panicIndoorSpeed = RUN_SPEED;
-            float curSpd = std::hypot(u.vx, u.vy);
-            if (curSpd < 1.0f || rng->bounded(100) < 12) {
-                float angle = static_cast<float>(rng->generateDouble() * 6.28318);
-                u.vx = std::cos(angle) * panicIndoorSpeed;
-                u.vy = std::sin(angle) * panicIndoorSpeed;
+            if (seesZombieOutside) {
+                // Отбегаем от двери в сторону центра здания
+                float awayX = (u.x - outThreatX) + (b.cx - u.x) * 0.8f;
+                float awayY = (u.y - outThreatY) + (b.cy - u.y) * 0.8f;
+                float len = distanceBetween(awayX, awayY);
+                if (len > 0.01f) {
+                    u.vx = (awayX / len) * panicIndoorSpeed;
+                    u.vy = (awayY / len) * panicIndoorSpeed;
+                }
+            } else {
+                float curSpd = distanceBetween(u.vx, u.vy);
+                if (curSpd < 1.0f || rng->bounded(100) < 12) {
+                    float angle = static_cast<float>(rng->generateDouble() * 6.28318);
+                    u.vx = std::cos(angle) * panicIndoorSpeed;
+                    u.vy = std::sin(angle) * panicIndoorSpeed;
+                }
             }
 
-            // Не выбегаем случайно в дверной проём
+            // Не выбегаем обратно в дверной проём
             float lookAheadX = u.x + (u.vx / panicIndoorSpeed) * 2.5f;
             float lookAheadY = u.y + (u.vy / panicIndoorSpeed) * 2.5f;
             int lx = std::clamp(static_cast<int>(lookAheadX), 0, mapW - 1);
@@ -817,7 +825,7 @@ void GameWorld::updateCitizenBehavior(Unit &u,
         if (u.panicTimerSec > 0.0f)
             u.panicTimerSec = std::max(0.0f, u.panicTimerSec - dt);
 
-        updateCitizenSchedule(u, dt, buildings);
+        updateCitizenSchedule(u, buildings);
         return;
     }
 
@@ -890,13 +898,8 @@ void GameWorld::updateCitizenBehavior(Unit &u,
         return;
     }
 
-    // Спокойно — расписание + редкий случайный поворот
-    updateCitizenSchedule(u, dt, buildings);
-    if (u.state == UnitState::Walking && rng->bounded(100) < 4) {
-        float angle = static_cast<float>(rng->generateDouble() * 6.28318);
-        u.vx = std::cos(angle) * BASE_CITIZEN_SPEED;
-        u.vy = std::sin(angle) * BASE_CITIZEN_SPEED;
-    }
+    // Спокойно — расписание
+    updateCitizenSchedule(u, buildings);
 }
 
 void GameWorld::updateZombieBehavior(Unit &u,
@@ -952,7 +955,7 @@ void GameWorld::updateZombieBehavior(Unit &u,
             QPointF wp = u.waypoints.front();
             float wdx = static_cast<float>(wp.x()) - u.x;
             float wdy = static_cast<float>(wp.y()) - u.y;
-            float wdist = std::hypot(wdx, wdy);
+            float wdist = distanceBetween(wdx, wdy);
             if (wdist < 1.5f) {
                 u.waypoints.erase(u.waypoints.begin());
             } else {
@@ -989,14 +992,15 @@ void GameWorld::updateZombieBehavior(Unit &u,
         } else {
             // Цель видна через тротуар, но напрямую пройти нельзя — обходим по графу дорог
             if (u.waypoints.empty()
-                || std::hypot(u.waypoints.back().x() - tx, u.waypoints.back().y() - ty) > 25.0f) {
+                || distanceBetween(u.waypoints.back().x() - tx, u.waypoints.back().y() - ty)
+                       > 25.0f) {
                 u.waypoints = buildPathBetween(QPointF(u.x, u.y), QPointF(tx, ty));
                 if (u.waypoints.size() >= 2) {
                     float segLen = static_cast<float>(
-                        std::hypot(u.waypoints[1].x() - u.waypoints[0].x(),
-                                   u.waypoints[1].y() - u.waypoints[0].y()));
+                        distanceBetween(u.waypoints[1].x() - u.waypoints[0].x(),
+                                        u.waypoints[1].y() - u.waypoints[0].y()));
                     float distToSecond = static_cast<float>(
-                        std::hypot(u.waypoints[1].x() - u.x, u.waypoints[1].y() - u.y));
+                        distanceBetween(u.waypoints[1].x() - u.x, u.waypoints[1].y() - u.y));
                     if (distToSecond < segLen
                         && hasWalkableLineOfSight(u.x, u.y, u.waypoints[1].x(), u.waypoints[1].y())) {
                         u.waypoints.erase(u.waypoints.begin());
@@ -1007,7 +1011,7 @@ void GameWorld::updateZombieBehavior(Unit &u,
                 QPointF wp = u.waypoints.front();
                 float wdx = static_cast<float>(wp.x()) - u.x;
                 float wdy = static_cast<float>(wp.y()) - u.y;
-                float wdist = std::hypot(wdx, wdy);
+                float wdist = distanceBetween(wdx, wdy);
                 float reachR = (u.waypoints.size() > 1) ? (roadWidth() * 0.35f) : 2.0f;
                 if (wdist <= reachR) {
                     u.waypoints.erase(u.waypoints.begin());
@@ -1025,7 +1029,7 @@ void GameWorld::updateZombieBehavior(Unit &u,
         QPointF target = u.waypoints.front();
         float dx = static_cast<float>(target.x()) - u.x;
         float dy = static_cast<float>(target.y()) - u.y;
-        float dist = std::hypot(dx, dy);
+        float dist = distanceBetween(dx, dy);
         if (dist < 1.5f) {
             u.waypoints.erase(u.waypoints.begin());
         } else {
@@ -1048,7 +1052,7 @@ void GameWorld::updateZombieBehavior(Unit &u,
         } else {
             float dx = static_cast<float>(u.lastKnownTargetPos.x()) - u.x;
             float dy = static_cast<float>(u.lastKnownTargetPos.y()) - u.y;
-            float d = std::hypot(dx, dy);
+            float d = distanceBetween(dx, dy);
             if (d < 4.0f) {
                 u.targetUnitId = -1;
                 u.hasLastKnownTarget = false;
@@ -1145,26 +1149,22 @@ void GameWorld::stepUnitMovement(Unit &u,
     // Задачи:
     // 1. Урон/избегание огня
     // 2. Отталкивание от бордюров
-    // 3. Замедление внутри зданий
+    // 3. Изменение скорости внутри зданий
     // 4. Шаг перемещения со скольжением вдоль стен
-    // 5. Анти-застревание при движении к зданию
+    // 5. Анти-застревание
 
     auto *rng = QRandomGenerator::global();
-    const auto &walkGrid = g_generator.walkGrid();
-    const int mapW = g_generator.width();
-    const int mapH = g_generator.height();
 
     // 1–2
     applyFireAvoidanceAndDamage(u, dt, buildings);
     applyWallRepulsion(u, dt);
 
-    // 3. Замедление внутри здания
-    if (u.insideBuildingId != -1) {
-        if (u.state == UnitState::AtHome || u.state == UnitState::Working) {
-            float speedFactor = g_generator.level.speedInBuildingPercent / 100.0f;
-            u.vx *= speedFactor;
-            u.vy *= speedFactor;
-        }
+    // 3. Изменение скорости внутри здания
+    if (u.insideBuildingId != -1
+        && (u.state == UnitState::AtHome || u.state == UnitState::Working)) {
+        float speedFactor = g_generator.level.speedInBuildingPercent / 100.0f;
+        u.vx *= speedFactor;
+        u.vy *= speedFactor;
     }
 
     // 4. Шаг со скольжением
@@ -1194,7 +1194,6 @@ void GameWorld::stepUnitMovement(Unit &u,
             movedX = true;
         }
     }
-
     if (!movedY && std::abs(u.vy) > 0.1f) {
         float slideStep = (u.vx >= 0.0f) ? roadWidth() * 0.12f : -roadWidth() * 0.12f;
         if (isWalkable(u.x + slideStep, nextY)) {
@@ -1207,37 +1206,35 @@ void GameWorld::stepUnitMovement(Unit &u,
             movedY = true;
         }
     }
-
     if (!movedX && !movedY) {
         float escapeAngle = static_cast<float>(rng->generateDouble() * 6.28318);
-        float currentSpeed = std::hypot(u.vx, u.vy);
+        float currentSpeed = distanceBetween(u.vx, u.vy);
         if (currentSpeed < 5.0f)
             currentSpeed = BASE_CITIZEN_SPEED;
         u.vx = std::cos(escapeAngle) * currentSpeed;
         u.vy = std::sin(escapeAngle) * currentSpeed;
     }
 
-    // 5. Анти-застревание при движении по waypoints (для всех типов юнитов)
-    if (!u.waypoints.empty() && u.insideBuildingId == -1) {
+    // 5. Анти-застревание для всех
+    if (!u.waypoints.empty()) {
         u.stuckTimerSec += dt;
         if (u.stuckTimerSec >= 1.2f) {
             float moved = static_cast<float>(
-                std::hypot(u.x - u.lastCheckPos.x(), u.y - u.lastCheckPos.y()));
+                distanceBetween(u.x - u.lastCheckPos.x(), u.y - u.lastCheckPos.y()));
             u.lastCheckPos = QPointF(u.x, u.y);
             u.stuckTimerSec = 0.0f;
 
             if (moved < 2.0f) {
-                if ((u.state == UnitState::GoingToWork || u.state == UnitState::GoingHome)
-                    && u.targetBuildingId >= 0
-                    && u.targetBuildingId < static_cast<int>(buildings.size())) {
-                    u.waypoints = buildPathToBuilding(QPointF(u.x, u.y),
-                                                      buildings[u.targetBuildingId]);
+                // Ограничиваем перестроения не чаще 2 раз подряд
+                if (u.repathCount < 2) {
+                    u.repathCount++;
+                    u.waypoints = buildPathBetween(QPointF(u.x, u.y), u.waypoints.back());
                 } else {
-                    // Для зомби, солдат и гуляющих: сбрасываем застрявший маршрут и след
-                    u.waypoints.clear();
-                    u.targetUnitId = -1;
-                    u.hasLastKnownTarget = false;
+                    u.waypoints.clear(); // Сдаёмся, если путь всё равно заблокирован
+                    u.repathCount = 0;
                 }
+            } else {
+                u.repathCount = 0;
             }
         }
     } else {
@@ -1437,7 +1434,113 @@ bool GameWorld::selectUnitAt(float worldX, float worldY, float radius)
 
     updateSelectedUnitInfo(true);
     emit selectedUnitChanged();
+    emit unitsUpdated();
     return (foundId != -1);
+}
+void GameWorld::rebuildSelectedUnitPathGeometry()
+{
+    g_selectedPathGeometry.clear();
+
+    const Unit *found = nullptr;
+    for (const auto &u : g_units) {
+        if (u.id == g_selectedUnitId && u.hp > 0) {
+            found = &u;
+            break;
+        }
+    }
+
+    if (!found)
+        return;
+
+    // Собираем последовательность точек маршрута от текущей позиции юнита
+    std::vector<QPointF> pts;
+    pts.reserve(found->waypoints.size() + 2);
+    pts.emplace_back(found->x, found->y);
+
+    for (const auto &wp : found->waypoints) {
+        pts.push_back(wp);
+    }
+
+    // Если waypoints пусты, но у юнита есть прямая цель (например, зомби бежит по следу или солдат по мосту)
+    if (found->waypoints.empty()) {
+        if (found->type == UnitType::Zombie && found->hasLastKnownTarget) {
+            pts.push_back(found->lastKnownTargetPos);
+        } else if (found->type == UnitType::Soldier && found->onEvacBridge) {
+            pts.push_back(found->evacBridgeEnd);
+        } else if ((found->state == UnitState::Evacuating
+                    || found->state == UnitState::PanicEvacuating)
+                   && found->targetBuildingId >= 0) {
+            const auto &nodes = g_generator.nodes();
+            if (found->targetBuildingId < static_cast<int>(nodes.size())) {
+                pts.push_back(nodes[found->targetBuildingId].pos);
+            }
+        }
+    }
+
+    if (pts.size() < 2)
+        return;
+
+    // Цвет маршрута в зависимости от типа юнита
+    uint8_t r = 246, g = 173, b = 85; // Оранжевый (житель)
+    if (found->type == UnitType::Soldier) {
+        r = 99;
+        g = 179;
+        b = 237; // Голубой (солдат)
+    } else if (found->type == UnitType::Zombie) {
+        r = 252;
+        g = 129;
+        b = 129; // Красно-коралловый (зомби)
+    } else if (found->state == UnitState::Evacuating || found->state == UnitState::PanicEvacuating) {
+        r = 104;
+        g = 211;
+        b = 145; // Зелёный (эвакуация)
+    }
+
+    const float lineThickness = 1.4F;
+    const float nodeMarkerSize = 2.6F;
+
+    // 1. Сегменты линии (с тёмной подложкой для читаемости на светлом и тёмном фоне)
+    for (size_t i = 0; i + 1 < pts.size(); ++i) {
+        float x1 = static_cast<float>(pts[i].x());
+        float y1 = static_cast<float>(pts[i].y());
+        float x2 = static_cast<float>(pts[i + 1].x());
+        float y2 = static_cast<float>(pts[i + 1].y());
+
+        float dx = x2 - x1;
+        float dy = y2 - y1;
+        float len = distanceBetween(dx, dy);
+        if (len < 0.05F)
+            continue;
+
+        float cx = (x1 + x2) * 0.5F;
+        float cy = (y1 + y2) * 0.5F;
+        float angle = std::atan2(dy, dx);
+
+        // Тёмная обводка линии
+        g_selectedPathGeometry
+            .push_back({cx, cy, len + 0.8F, lineThickness + 1.0F, angle, 15, 20, 28, 210});
+        // Основная цветная линия
+        g_selectedPathGeometry.push_back({cx, cy, len, lineThickness, angle, r, g, b, 235});
+    }
+
+    // 2. Узловые точки (waypoints) и финальная цель
+    for (size_t i = 1; i < pts.size(); ++i) {
+        float px = static_cast<float>(pts[i].x());
+        float py = static_cast<float>(pts[i].y());
+        bool isFinal = (i + 1 == pts.size());
+        float sz = isFinal ? (nodeMarkerSize * 1.5F) : nodeMarkerSize;
+
+        g_selectedPathGeometry.push_back({px, py, sz + 1.2F, sz + 1.2F, 0.0F, 15, 20, 28, 230});
+        g_selectedPathGeometry.push_back({px,
+                                          py,
+                                          sz,
+                                          sz,
+                                          0.0F,
+                                          (isFinal ? static_cast<uint8_t>(255) : r),
+                                          isFinal ? static_cast<uint8_t>(255) : g,
+                                          isFinal ? static_cast<uint8_t>(255) : b,
+                                          255});
+    }
 }
 
 void GameWorld::updateSelectedUnitInfo(bool logDebug)
@@ -1460,6 +1563,7 @@ void GameWorld::updateSelectedUnitInfo(bool logDebug)
         g_selectedUnitId = -1;
         info["valid"] = false;
         g_selectedUnitInfo = info;
+        g_selectedPathGeometry.clear();
         return;
     }
 
@@ -1564,6 +1668,8 @@ void GameWorld::updateSelectedUnitInfo(bool logDebug)
                            << "\n  Waypoints (" << found->waypoints.size()
                            << "):" << (wpList.isEmpty() ? "пусто" : wpList.join(" -> "));
     }
+
+    rebuildSelectedUnitPathGeometry();
 }
 
 void GameWorld::updateSelectedBuildingInfo()
@@ -1671,7 +1777,7 @@ void GameWorld::updateSelectedBuildingInfo()
         float bestRouteDist = 1e9f;
         for (const auto &r : routes) {
             float d = static_cast<float>(
-                std::hypot(r.startPos.x() - evacPos.x(), r.startPos.y() - evacPos.y()));
+                distanceBetween(r.startPos.x() - evacPos.x(), r.startPos.y() - evacPos.y()));
             if (d < bestRouteDist) {
                 bestRouteDist = d;
                 bestRoute = &r;

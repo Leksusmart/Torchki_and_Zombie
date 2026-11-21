@@ -10,8 +10,9 @@ void GameWorld::buildRoadGraphCache()
 
     g_roadAdj.assign(n, {});
     for (const auto &e : edges) {
-        float dist = static_cast<float>(std::hypot(nodes[e.fromId].pos.x() - nodes[e.toId].pos.x(),
-                                                   nodes[e.fromId].pos.y() - nodes[e.toId].pos.y()));
+        float dist = static_cast<float>(
+            distanceBetween(nodes[e.fromId].pos.x() - nodes[e.toId].pos.x(),
+                            nodes[e.fromId].pos.y() - nodes[e.toId].pos.y()));
         g_roadAdj[e.fromId].push_back({e.toId, dist});
         g_roadAdj[e.toId].push_back({e.fromId, dist});
     }
@@ -54,12 +55,16 @@ void GameWorld::buildRoadGraphCache()
         }
     }
 
-    // 3. Заранее привязываем каждое здание к ближайшему видимому узлу дороги
+    // 3. Заранее привязываем каждое здание к ближайшему видимому узлу дороги (если не привязано в MapGenerator)
     auto &buildings = const_cast<std::vector<BuildingObject> &>(g_generator.buildings());
     for (auto &b : buildings) {
         if (b.pathFromRoad.empty()) {
             b.nearestNodeId = -1;
             b.distToNode = 1e9F;
+            continue;
+        }
+        if (b.nearestNodeId >= 0 && b.nearestNodeId < n) {
+            b.distToNode = 0.0F;
             continue;
         }
 
@@ -73,7 +78,7 @@ void GameWorld::buildRoadGraphCache()
         for (int i = 0; i < n; ++i) {
             float nx = static_cast<float>(nodes[i].pos.x());
             float ny = static_cast<float>(nodes[i].pos.y());
-            float d = std::hypot(nx - bx, ny - by);
+            float d = distanceBetween(nx - bx, ny - by);
             if (d < bestDist && hasWalkableLineOfSight(nx, ny, bx, by)) {
                 bestDist = d;
                 bestNode = i;
@@ -83,7 +88,7 @@ void GameWorld::buildRoadGraphCache()
             bestNode = findNearestRoadNode(bx, by);
             if (bestNode != -1) {
                 bestDist = static_cast<float>(
-                    std::hypot(nodes[bestNode].pos.x() - bx, nodes[bestNode].pos.y() - by));
+                    distanceBetween(nodes[bestNode].pos.x() - bx, nodes[bestNode].pos.y() - by));
             }
         }
         b.nearestNodeId = bestNode;
@@ -91,75 +96,130 @@ void GameWorld::buildRoadGraphCache()
     }
 }
 
+std::vector<QPointF> GameWorld::buildPathBetween(float startPosX,
+                                                 float startPosY,
+                                                 float endPosX,
+                                                 float endPosY) const
+{
+    return buildPathBetween(QPointF(startPosX, startPosY), QPointF(endPosX, endPosY));
+}
 std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPos) const
 {
-    std::vector<QPointF> path;
+    const auto &walkGrid = g_generator.walkGrid();
+    const auto &buildings = g_generator.buildings();
     const auto &nodes = g_generator.nodes();
+    int w = g_generator.width();
+    int h = g_generator.height();
 
+    // Вспомогательная лямбда: определяем ID здания по координатам (-1 если на улице)
+    auto getBuildingId = [&](QPointF p) -> int {
+        int gx = static_cast<int>(p.x());
+        int gy = static_cast<int>(p.y());
+        if (gx < 0 || gx >= w || gy < 0 || gy >= h)
+            return -1;
+        int val = walkGrid[gy * w + gx];
+        return (val >= 10) ? (val - 10) : -1;
+    };
+
+    int startBId = getBuildingId(startPos);
+    int endBId = getBuildingId(endPos);
+
+    // СЛУЧАЙ 1: Обе точки в одном здании
+    if (startBId != -1 && startBId == endBId) {
+        if (hasWalkableLineOfSight(static_cast<float>(startPos.x()),
+                                   static_cast<float>(startPos.y()),
+                                   static_cast<float>(endPos.x()),
+                                   static_cast<float>(endPos.y()))) {
+            return {endPos};
+        }
+        for (const auto &b : buildings) {
+            if (b.id == startBId) {
+                return {QPointF(b.cx, b.cy), endPos};
+            }
+        }
+    }
+
+    std::vector<QPointF> fullPath;
+
+    // СЛУЧАЙ 2: Старт внутри здания -> доходим до его двери (узел startBuilding->nearestNodeId)
+    const BuildingObject *startBuilding = nullptr;
+    if (startBId != -1) {
+        for (const auto &b : buildings) {
+            if (b.id == startBId) {
+                startBuilding = &b;
+                break;
+            }
+        }
+        if (startBuilding && startBuilding->nearestNodeId != -1) {
+            QPointF doorPos = nodes[startBuilding->nearestNodeId].pos;
+            if (!hasWalkableLineOfSight(static_cast<float>(startPos.x()),
+                                        static_cast<float>(startPos.y()),
+                                        static_cast<float>(doorPos.x()),
+                                        static_cast<float>(doorPos.y()))) {
+                fullPath.emplace_back(startBuilding->cx, startBuilding->cy);
+            }
+            fullPath.push_back(doorPos);
+        }
+    }
+
+    // СЛУЧАЙ 3: Финиш внутри здания -> конечный узел графа это дверь целевого здания
+    const BuildingObject *endBuilding = nullptr;
+    if (endBId != -1) {
+        for (const auto &b : buildings) {
+            if (b.id == endBId) {
+                endBuilding = &b;
+                break;
+            }
+        }
+    }
+
+    // Определяем стартовый и конечный узлы в едином графе (дороги + переулки)
     float sx = static_cast<float>(startPos.x());
     float sy = static_cast<float>(startPos.y());
     float ex = static_cast<float>(endPos.x());
     float ey = static_cast<float>(endPos.y());
 
-    // 1. Прямой путь разрешён ТОЛЬКО если дверь близко И видна без единого препятствия
-    if (std::hypot(ex - sx, ey - sy) < 45.0f && hasWalkableLineOfSight(sx, sy, ex, ey)) {
-        path.push_back(endPos);
-        return path;
-    }
+    int startNode = (startBuilding && startBuilding->nearestNodeId != -1)
+                        ? startBuilding->nearestNodeId
+                        : findNearestRoadNode(sx, sy);
 
-    // 2. Ищем ближайший узел графа, который РЕАЛЬНО ВИДЕН с текущей точки (без стен и островков)
-    int startNode = -1;
-    float bestStartDist = 1e9f;
-    for (size_t i = 0; i < nodes.size(); ++i) {
-        float nx = static_cast<float>(nodes[i].pos.x());
-        float ny = static_cast<float>(nodes[i].pos.y());
-        float d = std::hypot(nx - sx, ny - sy);
-        if (d < bestStartDist && hasWalkableLineOfSight(sx, sy, nx, ny)) {
-            bestStartDist = d;
-            startNode = static_cast<int>(i);
-        }
-    }
-    if (startNode == -1) {
-        startNode = findNearestRoadNode(sx, sy);
-    }
+    int endNode = (endBuilding && endBuilding->nearestNodeId != -1) ? endBuilding->nearestNodeId
+                                                                    : findNearestRoadNode(ex, ey);
 
-    // 3. Ищем ближайший к двери узел графа, из которого дверь ВИДНА напрямую без препятствий
-    int endNode = -1;
-    float bestEndDist = 1e9f;
-    for (size_t i = 0; i < nodes.size(); ++i) {
-        float nx = static_cast<float>(nodes[i].pos.x());
-        float ny = static_cast<float>(nodes[i].pos.y());
-        float d = std::hypot(nx - ex, ny - ey);
-        if (d < bestEndDist && hasWalkableLineOfSight(nx, ny, ex, ey)) {
-            bestEndDist = d;
-            endNode = static_cast<int>(i);
-        }
-    }
-    if (endNode == -1) {
-        endNode = findNearestRoadNode(ex, ey);
+    // Если обе точки на улице и близко по прямой без препятствий — идём напрямую
+    if (!startBuilding && !endBuilding && distanceBetween(ex - sx, ey - sy) < 45.0F
+        && hasWalkableLineOfSight(sx, sy, ex, ey)) {
+        fullPath.push_back(endPos);
+        return fullPath;
     }
 
     if (startNode == -1 || endNode == -1) {
-        path.push_back(endPos);
-        return path;
+        fullPath.push_back(endPos);
+        return fullPath;
     }
 
     if (startNode == endNode) {
-        path.push_back(nodes[startNode].pos);
-        path.push_back(endPos);
-        return path;
+        if (fullPath.empty()) {
+            fullPath.push_back(nodes[startNode].pos);
+        }
+        if (!endBuilding
+            || distanceBetween(ex - static_cast<float>(nodes[endNode].pos.x()),
+                               ey - static_cast<float>(nodes[endNode].pos.y()))
+                   > 1.0F) {
+            fullPath.push_back(endPos);
+        }
+        return fullPath;
     }
 
-    // 4. Поиск кратчайшего пути по рёбрам графа (алгоритм Дейкстры)
+    // Поиск кратчайшего пути по единому графу (дороги + все колена переулков)
     const int n = static_cast<int>(nodes.size());
-    std::vector<float> dist(n, 1e9f);
+    std::vector<float> dist(n, 1e9F);
     std::vector<int> prev(n, -1);
-
     using PQItem = std::pair<float, int>;
     std::priority_queue<PQItem, std::vector<PQItem>, std::greater<PQItem>> pq;
 
-    dist[startNode] = 0.0f;
-    pq.push({0.0f, startNode});
+    dist[startNode] = 0.0F;
+    pq.push({0.0F, startNode});
 
     while (!pq.empty()) {
         auto [d, u] = pq.top();
@@ -185,16 +245,21 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
     }
     std::reverse(nodeChain.begin(), nodeChain.end());
 
-    size_t startIdx = 0;
-    if (nodeChain.size() >= 2) {
+    // Если стартовали из здания, узел двери (nodeChain[0]) мы уже добавили в fullPath
+    size_t startIdx = (startBuilding && !nodeChain.empty() && nodeChain[0] == startNode) ? 1 : 0;
+
+    // Если стартовали с улицы и уже прошли мимо первого узла вдоль первого ребра — пропускаем его
+    if (!startBuilding && nodeChain.size() >= 2) {
         QPointF p0 = nodes[nodeChain[0]].pos;
         QPointF p1 = nodes[nodeChain[1]].pos;
-        float dToFirst = static_cast<float>(std::hypot(p0.x() - sx, p0.y() - sy));
-        float segLen = static_cast<float>(std::hypot(p1.x() - p0.x(), p1.y() - p0.y()));
-        float dToSecond = static_cast<float>(std::hypot(p1.x() - sx, p1.y() - sy));
+        float dToFirst = distanceBetween(static_cast<float>(p0.x()) - sx,
+                                         static_cast<float>(p0.y()) - sy);
+        float segLen = distanceBetween(static_cast<float>(p1.x() - p0.x()),
+                                       static_cast<float>(p1.y() - p0.y()));
+        float dToSecond = distanceBetween(static_cast<float>(p1.x()) - sx,
+                                          static_cast<float>(p1.y()) - sy);
 
-        // Если юнит уже стоит вплотную к первому узлу ИЛИ уже продвинулся вдоль ребра p0 -> p1 (видит p1 напрямую)
-        if (dToFirst < 3.0f
+        if (dToFirst < 3.0F
             || (dToSecond < segLen
                 && hasWalkableLineOfSight(sx,
                                           sy,
@@ -204,30 +269,14 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
         }
     }
 
-    float rw = roadWidth();
-
     for (size_t i = startIdx; i < nodeChain.size(); ++i) {
-        QPointF pt = nodes[nodeChain[i]].pos;
-
-        // Вычисляем направление сегмента дороги для смещения по полосе (в пределах 75% ширины)
-        QPointF prevPt = (i > 0) ? nodes[nodeChain[i - 1]].pos : startPos;
-        QPointF nextPt = (i + 1 < nodeChain.size()) ? nodes[nodeChain[i + 1]].pos : endPos;
-        float dirX = static_cast<float>(nextPt.x() - prevPt.x());
-        float dirY = static_cast<float>(nextPt.y() - prevPt.y());
-        float len = std::hypot(dirX, dirY);
-
-        if (len > 0.01f) {
-            // Перпендикуляр к дороге
-            float perpX = -dirY / len;
-            float perpY = dirX / len;
-            // Применяем смещение только если сдвинутая точка остаётся на асфальте
-            // (передаём laneOffset как параметр или сдвигаем в updateCitizenSchedule)
-        }
-        path.push_back(pt);
+        fullPath.push_back(nodes[nodeChain[i]].pos);
     }
-    path.push_back(endPos);
 
-    return path;
+    // Финальная точка (центр целевого здания или точка на улице/выходе)
+    fullPath.push_back(endPos);
+
+    return fullPath;
 }
 
 int GameWorld::findNearestRoadNode(float x, float y) const
@@ -242,7 +291,7 @@ int GameWorld::findNearestRoadNode(float x, float y) const
     for (size_t i = 0; i < nodes.size(); ++i) {
         float nx = static_cast<float>(nodes[i].pos.x());
         float ny = static_cast<float>(nodes[i].pos.y());
-        float d = std::hypot(nx - x, ny - y);
+        float d = distanceBetween(nx - x, ny - y);
 
         if (d < fallbackDist) {
             fallbackDist = d;
@@ -301,7 +350,7 @@ int GameWorld::findNearestAvailableBuilding(float x, float y, bool wantWorkplace
             for (int nodeIdx : g_nodeSpatialGrid[ny * g_gridCols + nx]) {
                 float px = static_cast<float>(nodes[nodeIdx].pos.x());
                 float py = static_cast<float>(nodes[nodeIdx].pos.y());
-                float d = std::hypot(px - x, py - y);
+                float d = distanceBetween(px - x, py - y);
                 if (d < bestStartDist && hasWalkableLineOfSight(x, y, px, py)) {
                     bestStartDist = d;
                     startNode = nodeIdx;
@@ -315,7 +364,7 @@ int GameWorld::findNearestAvailableBuilding(float x, float y, bool wantWorkplace
         startNode = findNearestRoadNode(x, y);
         if (startNode != -1) {
             bestStartDist = static_cast<float>(
-                std::hypot(nodes[startNode].pos.x() - x, nodes[startNode].pos.y() - y));
+                distanceBetween(nodes[startNode].pos.x() - x, nodes[startNode].pos.y() - y));
         }
     }
 
@@ -390,10 +439,11 @@ bool GameWorld::hasLineOfSight(float x1, float y1, float x2, float y2) const
     while (true) {
         if (ix1 >= 0 && ix1 < w && iy1 >= 0 && iy1 < h) {
             int idx = iy1 * w + ix1;
-            if (cityMask[idx] == 2) {
+            if (cityMask[idx] == 2 && walkGrid[idx] == 0) {
                 return false;
             }
         }
+
         if (ix1 == ix2 && iy1 == iy2)
             break;
         int e2 = 2 * err;
@@ -463,27 +513,6 @@ bool GameWorld::isWalkable(float x, float y) const
     return g_generator.walkGrid()[gy * w + gx] != 0;
 }
 
-std::vector<QPointF> GameWorld::buildPathToBuilding(QPointF startPos, const BuildingObject &b) const
-{
-    std::vector<QPointF> path;
-    if (b.pathFromRoad.empty()) {
-        path.push_back(QPointF(b.cx, b.cy));
-        return path;
-    }
-
-    // 1. Строим путь по дорогам от текущей позиции до начала тропинки (pathFromRoad.front())
-    path = buildPathBetween(startPos, b.pathFromRoad.front());
-
-    // 2. Добавляем все изгибы ломаной тропинки до проёма двери
-    for (size_t i = 1; i < b.pathFromRoad.size(); ++i) {
-        path.push_back(b.pathFromRoad[i]);
-    }
-
-    // 3. Финальная точка — центр комнаты, чтобы юнит уверенно прошёл через проём (walkMap = 2) на пол (10 + b.id)
-    path.push_back(QPointF(b.cx, b.cy));
-    return path;
-}
-
 bool GameWorld::isCityArea(float x, float y) const
 {
     int gx = static_cast<int>(x);
@@ -508,7 +537,7 @@ bool GameWorld::isCityArea(float x, float y) const
     for (const auto &node : g_generator.nodes()) {
         if (!node.isEvacExit)
             continue;
-        float d = static_cast<float>(std::hypot(node.pos.x() - worldX, node.pos.y() - worldY));
+        float d = static_cast<float>(distanceBetween(node.pos.x() - worldX, node.pos.y() - worldY));
         if (d <= bestDist) {
             bestDist = d;
             res["snapped"] = true;

@@ -53,10 +53,10 @@ bool GameWorld::updateSoldierEvacuation(Unit &u,
         u.waypoints = buildPathBetween(QPointF(u.x, u.y), evacPos);
 
         if (u.waypoints.size() >= 2) {
-            float d01 = static_cast<float>(std::hypot(u.waypoints[1].x() - u.waypoints[0].x(),
-                                                      u.waypoints[1].y() - u.waypoints[0].y()));
+            float d01 = static_cast<float>(distanceBetween(u.waypoints[1].x() - u.waypoints[0].x(),
+                                                           u.waypoints[1].y() - u.waypoints[0].y()));
             float d1 = static_cast<float>(
-                std::hypot(u.waypoints[1].x() - u.x, u.waypoints[1].y() - u.y));
+                distanceBetween(u.waypoints[1].x() - u.x, u.waypoints[1].y() - u.y));
             if (d1 < d01
                 && hasWalkableLineOfSight(u.x,
                                           u.y,
@@ -76,7 +76,7 @@ bool GameWorld::updateSoldierEvacuation(Unit &u,
     }
 
     // 5. Проверка достижения выхода -> переход на мост, иначе движение с уклонением от зомби
-    float distToExit = static_cast<float>(std::hypot(evacPos.x() - u.x, evacPos.y() - u.y));
+    float distToExit = static_cast<float>(distanceBetween(evacPos.x() - u.x, evacPos.y() - u.y));
     if (distToExit <= 5.0F) {
         const auto &routes = g_generator.evacRoutes();
         if (!routes.empty()) {
@@ -84,7 +84,7 @@ bool GameWorld::updateSoldierEvacuation(Unit &u,
             float bestRouteDist = 1e9F;
             for (const auto &r : routes) {
                 float d = static_cast<float>(
-                    std::hypot(r.startPos.x() - evacPos.x(), r.startPos.y() - evacPos.y()));
+                    distanceBetween(r.startPos.x() - evacPos.x(), r.startPos.y() - evacPos.y()));
                 if (d < bestRouteDist) {
                     bestRouteDist = d;
                     bestRoute = &r;
@@ -126,7 +126,7 @@ void GameWorld::updateSoldierBehavior(Unit &u,
     int fireTargetIdx = findSoldierFireTarget(u, activeZombies);
     if (fireTargetIdx != -1) {
         const Unit &target = g_units[fireTargetIdx];
-        float dist = std::hypot(target.x - u.x, target.y - u.y);
+        float dist = distanceBetween(target.x - u.x, target.y - u.y);
 
         fireAtTarget(u, static_cast<size_t>(fireTargetIdx));
 
@@ -144,7 +144,7 @@ void GameWorld::updateSoldierBehavior(Unit &u,
     int huntTargetIdx = findSoldierHuntTarget(u, activeZombies);
     if (huntTargetIdx != -1) {
         const Unit &huntTarget = g_units[huntTargetIdx];
-        routeSoldierToTarget(u, huntTarget, buildings);
+        routeSoldierToTarget(u, huntTarget);
         if (followSoldierWaypoints(u))
             return;
     }
@@ -164,7 +164,7 @@ bool GameWorld::moveSoldierOnEvacBridge(Unit &u, float dt)
 
     float dx = static_cast<float>(u.evacBridgeEnd.x()) - u.x;
     float dy = static_cast<float>(u.evacBridgeEnd.y()) - u.y;
-    float dist = std::hypot(dx, dy);
+    float dist = distanceBetween(dx, dy);
 
     // 1–2. Проверка конца пути и перемещение
     if (dist < 4.0F) {
@@ -195,7 +195,7 @@ int GameWorld::findSafestEvacExit(const Unit &u, const std::vector<size_t> &acti
 
         float ex = static_cast<float>(node.pos.x());
         float ey = static_cast<float>(node.pos.y());
-        float distToExit = std::hypot(ex - u.x, ey - u.y);
+        float distToExit = distanceBetween(ex - u.x, ey - u.y);
         float threatPenalty = 0.0F;
 
         // 1. Штрафуем выходы, у которых зомби стоят рядом с выходом или на пути к нему
@@ -204,13 +204,13 @@ int GameWorld::findSafestEvacExit(const Unit &u, const std::vector<size_t> &acti
             if (z.hp <= 0)
                 continue;
 
-            float dZombieExit = std::hypot(z.x - ex, z.y - ey);
+            float dZombieExit = distanceBetween(z.x - ex, z.y - ey);
             if (dZombieExit < 45.0F) {
                 threatPenalty += (45.0F - dZombieExit) * 6.0F;
             }
 
             // Проверяем, не находится ли видимый зомби прямо в секторе движения к этому выходу
-            float dZombieSoldier = std::hypot(z.x - u.x, z.y - u.y);
+            float dZombieSoldier = distanceBetween(z.x - u.x, z.y - u.y);
             if (dZombieSoldier < 55.0F && distToExit > 1.0F && dZombieSoldier > 0.1F
                 && hasLineOfSight(u.x, u.y, z.x, z.y)) {
                 float dot = ((ex - u.x) / distToExit) * ((z.x - u.x) / dZombieSoldier)
@@ -243,7 +243,7 @@ void GameWorld::applySoldierEvacAvoidance(Unit &u, const std::vector<size_t> &ac
     if (u.insideBuildingId != -1)
         return;
 
-    float speed = std::hypot(u.vx, u.vy);
+    float speed = distanceBetween(u.vx, u.vy);
     if (speed < 0.1F)
         return;
 
@@ -261,7 +261,7 @@ void GameWorld::applySoldierEvacAvoidance(Unit &u, const std::vector<size_t> &ac
 
         float dx = u.x - z.x;
         float dy = u.y - z.y;
-        float dist = std::hypot(dx, dy);
+        float dist = distanceBetween(dx, dy);
 
         if (dist <= 38.0F && dist > 0.1F && hasLineOfSight(u.x, u.y, z.x, z.y)) {
             hasThreat = true;
@@ -286,7 +286,7 @@ void GameWorld::applySoldierEvacAvoidance(Unit &u, const std::vector<size_t> &ac
     if (hasThreat) {
         float finalX = dirX * 1.15F + avoidX;
         float finalY = dirY * 1.15F + avoidY;
-        float len = std::hypot(finalX, finalY);
+        float len = distanceBetween(finalX, finalY);
         if (len > 0.01F) {
             u.vx = (finalX / len) * ZOMBIE_CHASE_SPEED;
             u.vy = (finalY / len) * ZOMBIE_CHASE_SPEED;
@@ -378,26 +378,19 @@ void GameWorld::adjustSoldierCombatPosition(Unit &u, float targetX, float target
     }
 }
 
-void GameWorld::routeSoldierToTarget(Unit &u,
-                                     const Unit &target,
-                                     const std::vector<BuildingObject> &buildings)
+void GameWorld::routeSoldierToTarget(Unit &u, const Unit &target)
 {
     // Задачи:
-    // 1. Если цель внутри здания — построить маршрут по дорогам И тропинке в дверь (buildPathToBuilding)
-    // 2. Если цель на улице — построить маршрут по дорожным узлам (buildPathBetween)
-    // 3. Исключить возврат к пройденному узлу позади и добавить выход из текущего здания солдата
+    // 1. Не перестраивать путь, если цель сместилась меньше чем на 20м от конца текущего маршрута
+    // 2. Построить путь через buildPathBetween (учитывает двери и тропинки зданий)
+    // 3. Отбросить первый узел на улице, если солдат уже продвинулся дальше него
 
-    // Если солдат и цель уже в одном здании — идём напрямую к цели по комнате
-    if (u.insideBuildingId != -1 && u.insideBuildingId == target.insideBuildingId) {
-        u.waypoints = {QPointF(target.x, target.y)};
-        return;
-    }
-
+    // 1. Проверяем смещение цели относительно конечной точки текущего маршрута
     if (!u.waypoints.empty()) {
-        QPointF lastPoint = u.waypoints.back();
-        float shift = static_cast<float>(
-            std::hypot(lastPoint.x() - target.x, lastPoint.y() - target.y));
-        if (shift <= 30.0F) {
+        QPointF lastPt = u.waypoints.back();
+        float targetShift = distanceBetween(static_cast<float>(lastPt.x()) - target.x,
+                                            static_cast<float>(lastPt.y()) - target.y);
+        if (targetShift <= 20.0F) {
             if (target.insideBuildingId == -1) {
                 u.waypoints.back() = QPointF(target.x, target.y);
             }
@@ -405,21 +398,17 @@ void GameWorld::routeSoldierToTarget(Unit &u,
         }
     }
 
-    // 1–2. Строим путь в зависимости от того, в здании цель или на улице
-    std::vector<QPointF> newPath;
-    if (target.insideBuildingId >= 0
-        && target.insideBuildingId < static_cast<int>(buildings.size())) {
-        newPath = buildPathToBuilding(QPointF(u.x, u.y), buildings[target.insideBuildingId]);
-    } else {
-        newPath = buildPathBetween(QPointF(u.x, u.y), QPointF(target.x, target.y));
-    }
+    // 1. Строим путь
+    std::vector<QPointF> newPath = buildPathBetween(u.x, u.y, target.x, target.y);
 
-    // Отбрасываем первый узел, если он позади солдата
-    if (newPath.size() >= 2) {
+    // 2. Отбрасываем первый узел, если он позади солдата
+
+    // 3. Если солдат на улице — отбрасываем первый узел, если он позади солдата
+    if (u.insideBuildingId == -1 && newPath.size() >= 2) {
         float segLen = static_cast<float>(
-            std::hypot(newPath[1].x() - newPath[0].x(), newPath[1].y() - newPath[0].y()));
+            distanceBetween(newPath[1].x() - newPath[0].x(), newPath[1].y() - newPath[0].y()));
         float distToSecond = static_cast<float>(
-            std::hypot(newPath[1].x() - u.x, newPath[1].y() - u.y));
+            distanceBetween(newPath[1].x() - u.x, newPath[1].y() - u.y));
         if (distToSecond < segLen
             && hasWalkableLineOfSight(u.x,
                                       u.y,
@@ -427,15 +416,6 @@ void GameWorld::routeSoldierToTarget(Unit &u,
                                       static_cast<float>(newPath[1].y()))) {
             newPath.erase(newPath.begin());
         }
-    }
-
-    // 3. Если солдат сам внутри другого здания — добавляем выход по тропинке в начало маршрута
-    if (u.insideBuildingId >= 0 && u.insideBuildingId < static_cast<int>(buildings.size())) {
-        const auto &b = buildings[u.insideBuildingId];
-        std::vector<QPointF> exitPts;
-        for (int p = static_cast<int>(b.pathFromRoad.size()) - 1; p >= 0; --p)
-            exitPts.push_back(b.pathFromRoad[p]);
-        newPath.insert(newPath.begin(), exitPts.begin(), exitPts.end());
     }
 
     u.waypoints = std::move(newPath);
@@ -448,7 +428,7 @@ void GameWorld::fireAtTarget(Unit &soldier, size_t targetIdx)
     // 2. Создать трассер пули, нанести урон и начислить награду при уничтожении
 
     Unit &target = g_units[targetIdx];
-    float dist = std::hypot(target.x - soldier.x, target.y - soldier.y);
+    float dist = distanceBetween(target.x - soldier.x, target.y - soldier.y);
 
     // 1. Проверка радиуса и кулдауна
     if (dist > 35.0F || soldier.attackCooldownSec > 0.0F)
@@ -477,7 +457,7 @@ int GameWorld::findSoldierHuntTarget(const Unit &u, const std::vector<size_t> &a
     int bestIdx = -1;
     float bestDistSq = 1e18F;
 
-    // 1. Приоритет: живые зомби
+    // 1. Приоритет: живые зомби в радиусе 300м
     for (size_t zIdx : activeZombies) {
         const Unit &z = g_units[zIdx];
         if (z.hp <= 0)
@@ -490,8 +470,13 @@ int GameWorld::findSoldierHuntTarget(const Unit &u, const std::vector<size_t> &a
             bestIdx = static_cast<int>(zIdx);
         }
     }
-    if (bestIdx != -1)
-        return bestIdx;
+    if (bestIdx != -1) {
+        float distToZombie = static_cast<float>(
+            distanceBetween(g_units[bestIdx].x - u.x, g_units[bestIdx].y - u.y));
+        if (distToZombie < 300)
+            return bestIdx;
+    }
+
     // 2. Если зомби нет — охота на инфицированных жителей
     for (size_t i = 0; i < g_units.size(); ++i) {
         const Unit &cand = g_units[i];
@@ -520,13 +505,14 @@ bool GameWorld::followSoldierWaypoints(Unit &u)
     int mapH = g_generator.height();
     int gx = std::clamp(static_cast<int>(u.x), 0, mapW - 1);
     int gy = std::clamp(static_cast<int>(u.y), 0, mapH - 1);
+
     // 1. На широкой дороге перекрёсток считается пройденным в радиусе 0.35 * roadWidth (как у жителей)
     bool onMainRoad = (walkGrid[gy * mapW + gx] == 1);
     float reachRadius = (onMainRoad && u.waypoints.size() > 1) ? (roadWidth() * 0.35F) : 2.5F;
     QPointF target = u.waypoints.front();
     float dx = static_cast<float>(target.x()) - u.x;
     float dy = static_cast<float>(target.y()) - u.y;
-    float dist = std::hypot(dx, dy);
+    float dist = distanceBetween(dx, dy);
     // 2. Переход к следующей точке или движение
     if (dist <= reachRadius) {
         u.waypoints.erase(u.waypoints.begin());
@@ -534,7 +520,7 @@ bool GameWorld::followSoldierWaypoints(Unit &u)
             target = u.waypoints.front();
             dx = static_cast<float>(target.x()) - u.x;
             dy = static_cast<float>(target.y()) - u.y;
-            dist = std::hypot(dx, dy);
+            dist = distanceBetween(dx, dy);
         }
     }
     if (dist > 0.1F) {
@@ -560,6 +546,10 @@ void GameWorld::patrolSoldier(Unit &u, const std::vector<BuildingObject> &buildi
     if (!nodes.empty()) {
         auto *rng = QRandomGenerator::global();
         int randNode = rng->bounded(static_cast<int>(nodes.size()));
+        for (int attempt = 0; attempt < 10 && nodes[randNode].isAlleyNode; ++attempt) {
+            randNode = rng->bounded(static_cast<int>(nodes.size()));
+        }
+
         u.waypoints = buildPathBetween(QPointF(u.x, u.y), nodes[randNode].pos);
     }
 }

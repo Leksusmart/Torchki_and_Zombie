@@ -24,6 +24,7 @@ public: // функции
     const std::vector<RoadEdge>& edges() const { return edgesList; }
     const std::vector<EvacRoute>& evacRoutes() const { return evacRoutesList; }
     const std::vector<int16_t>& walkGrid() const { return walkMap; }
+    float distanceBetween(float x, float y) const { return std::hypot(x, y); };
 
 public: // переменные
     LevelDefinition level;

@@ -86,7 +86,7 @@ void GameWorld::moveApproachingHelicopter(DropHelicopter &heli, float dt)
     // 1. Дистанция до цели
     float dx = static_cast<float>(heli.targetPos.x() - heli.pos.x());
     float dy = static_cast<float>(heli.targetPos.y() - heli.pos.y());
-    float dist = std::hypot(dx, dy);
+    float dist = distanceBetween(dx, dy);
 
     // 2. Расчёт скорости с торможением за 50м
     const float cruiseSpeed = 135.0F;
@@ -207,7 +207,7 @@ void GameWorld::rebuildHelicoptersRenderData()
         // 2. Маркер зоны посадки (пока десант не высажен)
         if (h.phase != DropHelicopter::Phase::Departing) {
             float dist = static_cast<float>(
-                std::hypot(h.targetPos.x() - h.pos.x(), h.targetPos.y() - h.pos.y()));
+                distanceBetween(h.targetPos.x() - h.pos.x(), h.targetPos.y() - h.pos.y()));
             int ArriveSec = 0;
             if (h.phase == DropHelicopter::Phase::Hovering)
                 ArriveSec = std::ceil(h.hoverTimerSec);

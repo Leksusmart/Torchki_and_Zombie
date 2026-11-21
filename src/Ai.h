@@ -2,31 +2,17 @@
 #include <QRandomGenerator>
 #include "GameWorld.h"
 
-void GameWorld::updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObject> &buildings)
+void GameWorld::updateCitizenSchedule(Unit &u, std::vector<BuildingObject> &buildings)
 {
     auto *rng = QRandomGenerator::global();
     const auto &walkGrid = g_generator.walkGrid();
     int mapW = g_generator.width();
     int mapH = g_generator.height();
-
-    // Во время паники распорядок дня отключается (кроме панической эвакуации)
-    if (u.panicTimerSec > 0.0F && u.state != UnitState::PanicEvacuating) {
-        // Если житель в панике находится внутри здания и у него есть маршрут выхода — бежим по нему к двери
-        if (!u.waypoints.empty()) {
-            QPointF target = u.waypoints.front();
-            float dx = static_cast<float>(target.x()) - u.x;
-            float dy = static_cast<float>(target.y()) - u.y;
-            float dist = std::hypot(dx, dy);
-            if (dist < 1.5F) {
-                u.waypoints.erase(u.waypoints.begin());
-            } else {
-                u.vx = (dx / dist) * RUN_SPEED;
-                u.vy = (dy / dist) * RUN_SPEED;
-            }
-        }
-        return;
-    }
-
+    bool isInsideBuilding = (u.insideBuildingId >= 0
+                             && u.insideBuildingId < static_cast<int>(buildings.size()));
+    bool isHomeBuilding = false;
+    if (isInsideBuilding)
+        isHomeBuilding = buildings[u.insideBuildingId].type == BuildingType::Residential;
     bool shouldBeAtWork = false;
     if (u.isNightWorker) {
         shouldBeAtWork = (g_timeOfDayHours >= 20.0F || g_timeOfDayHours < 6.0F);
@@ -34,350 +20,291 @@ void GameWorld::updateCitizenSchedule(Unit &u, float dt, std::vector<BuildingObj
         shouldBeAtWork = (g_timeOfDayHours >= 8.0F && g_timeOfDayHours < 18.0F);
     }
 
-    // --- 1. ЭВАКУАЦИЯ ---
-    if (u.state == UnitState::Evacuating || u.state == UnitState::PanicEvacuating) {
-        ActiveEvacuation *targetEvac = nullptr;
-        for (auto &ev : g_evacs) {
-            if (ev.evacNodeId == u.targetBuildingId) {
-                targetEvac = &ev;
-                break;
-            }
-        }
-
-        if (!targetEvac) {
-            u.state = UnitState::Walking;
-            u.stateTimerSec = 3.0F;
-            return;
-        }
-
-        float rw = roadWidth();
-        float routeDirX = 0.0F, routeDirY = 0.0F;
-
+    // --- МГНОВЕННЫЕ ДЕЙСТВИЯ ---
+    {
+        // ДВИЖЕНИЕ ОТ ЗОМБИ
         if (!u.waypoints.empty()) {
-            QPointF baseTarget = u.waypoints.front();
-            float dx = static_cast<float>(baseTarget.x()) - u.x;
-            float dy = static_cast<float>(baseTarget.y()) - u.y;
-            float dist = std::hypot(dx, dy);
+            if (u.panicTimerSec > 0.0F && u.state != UnitState::PanicEvacuating) {
+                // Если житель в панике и у него есть маршрут бежим по нему
+                QPointF target = u.waypoints.front();
+                float dx = static_cast<float>(target.x()) - u.x;
+                float dy = static_cast<float>(target.y()) - u.y;
+                float dist = distanceBetween(dx, dy);
+                if (dist < 1.5F) {
+                    u.waypoints.erase(u.waypoints.begin());
+                } else {
+                    u.vx = (dx / dist) * RUN_SPEED;
+                    u.vy = (dy / dist) * RUN_SPEED;
+                }
 
-            int gx = std::clamp(static_cast<int>(u.x), 0, mapW - 1);
-            int gy = std::clamp(static_cast<int>(u.y), 0, mapH - 1);
-            bool onMainRoad = (walkGrid[gy * mapW + gx] == 1);
-            float reachR = onMainRoad ? (rw * 0.35F) : 1.5F;
-
-            if (dist < reachR) {
-                u.waypoints.erase(u.waypoints.begin());
-            } else {
-                routeDirX = dx / dist;
-                routeDirY = dy / dist;
-            }
-        } else {
-            float dx = static_cast<float>(targetEvac->evacPos.x()) - u.x;
-            float dy = static_cast<float>(targetEvac->evacPos.y()) - u.y;
-            float dist = std::hypot(dx, dy);
-            if (dist > 0.1F) {
-                routeDirX = dx / dist;
-                routeDirY = dy / dist;
+                return;
             }
         }
 
-        if (u.state == UnitState::PanicEvacuating) {
-            float avoidX = 0.0F, avoidY = 0.0F;
-            bool closeZombie = false;
-
-            for (const auto &other : g_units) {
-                if (other.type != UnitType::Zombie)
-                    continue;
-                float zx = u.x - other.x;
-                float zy = u.y - other.y;
-                float zDist = std::hypot(zx, zy);
-
-                if (zDist <= 45.0F && zDist > 0.1F && hasLineOfSight(u.x, u.y, other.x, other.y)) {
-                    float weight = (45.0F - zDist) / 45.0F;
-                    avoidX += (zx / zDist) * weight * 1.6F;
-                    avoidY += (zy / zDist) * weight * 1.6F;
-                    if (zDist < 14.0F)
-                        closeZombie = true;
+        // ДВИЖЕНИЕ К ЭВАКУАЦИОННОМУ ВЫХОДУ
+        if (u.state == UnitState::Evacuating || u.state == UnitState::PanicEvacuating) {
+            ActiveEvacuation *targetEvac = nullptr;
+            for (auto &ev : g_evacs) {
+                if (ev.evacNodeId == u.targetBuildingId) {
+                    targetEvac = &ev;
+                    break;
                 }
             }
 
-            float finalX = routeDirX * (closeZombie ? 0.6F : 1.2F) + avoidX;
-            float finalY = routeDirY * (closeZombie ? 0.6F : 1.2F) + avoidY;
-            float finalLen = std::hypot(finalX, finalY);
+            if (targetEvac) {
+                float directionX = 0.0F,
+                      directionY = 0.0F; // направление к ближайшей точке маршрута
 
-            if (finalLen > 0.01F) {
-                u.vx = (finalX / finalLen) * RUN_SPEED;
-                u.vy = (finalY / finalLen) * RUN_SPEED;
-            }
-        } else if (std::hypot(routeDirX, routeDirY) > 0.01F) {
-            u.vx = routeDirX * RUN_SPEED;
-            u.vy = routeDirY * RUN_SPEED;
-        }
+                // Вычисляем направление к ближайшей точке маршрута, убираем пройденные точки
+                if (!u.waypoints.empty()) {
+                    QPointF baseTarget = u.waypoints.front();
+                    float dx = static_cast<float>(baseTarget.x()) - u.x;
+                    float dy = static_cast<float>(baseTarget.y()) - u.y;
+                    float dist = distanceBetween(dx, dy);
 
-        float distToExit = static_cast<float>(
-            std::hypot(u.x - targetEvac->evacPos.x(), u.y - targetEvac->evacPos.y()));
-        if (distToExit <= 5.0F) {
-            if (!targetEvac->completed && !u.isInfected
-                && targetEvac->boardedCount < g_generator.level.evac_capacity) {
-                targetEvac->boardedCount++;
-                g_evacuatedTotalCount++;
-                g_budget += 3.0;
+                    int gx = std::clamp(static_cast<int>(u.x), 0, mapW - 1);
+                    int gy = std::clamp(static_cast<int>(u.y), 0, mapH - 1);
+                    bool onMainRoad = (walkGrid[gy * mapW + gx] == 1);
+                    float reachR = onMainRoad ? (roadWidth() * 0.35F) : 1.5F;
 
-                float rAngle = static_cast<float>(rng->generateDouble() * 6.28318);
-                float rDist = static_cast<float>(std::sqrt(rng->generateDouble()) * 7.5);
-                targetEvac->passengerOffsets
-                    .push_back(QPointF(std::cos(rAngle) * rDist, std::sin(rAngle) * rDist));
-
-                u.hp = 0;
-                if (targetEvac->boardedCount >= g_generator.level.evac_capacity) {
-                    targetEvac->completed = true;
+                    if (dist < reachR) {
+                        u.waypoints.erase(u.waypoints.begin());
+                    } else {
+                        directionX = dx / dist;
+                        directionY = dy / dist;
+                    }
+                } else {
+                    float dx = static_cast<float>(targetEvac->evacPos.x()) - u.x;
+                    float dy = static_cast<float>(targetEvac->evacPos.y()) - u.y;
+                    float dist = distanceBetween(dx, dy);
+                    if (dist > 0.1F) {
+                        directionX = dx / dist;
+                        directionY = dy / dist;
+                    }
                 }
-                emit statsChanged();
-            } else {
+
+                // Рассчитываем направление движение к ближайшей точке маршрута с учётом уклонения от зомби
+                if (u.state == UnitState::PanicEvacuating) {
+                    float avoidX = 0.0F, avoidY = 0.0F;
+                    bool closeZombie = false;
+
+                    // Уклоняемся от зомби
+                    for (const auto &other : g_units) {
+                        if (other.type != UnitType::Zombie)
+                            continue;
+                        float zx = u.x - other.x;
+                        float zy = u.y - other.y;
+                        float zDist = distanceBetween(zx, zy);
+
+                        if (zDist <= 45.0F && zDist > 0.1F
+                            && hasLineOfSight(u.x, u.y, other.x, other.y)) {
+                            float weight = (45.0F - zDist) / 45.0F;
+                            avoidX += (zx / zDist) * weight * 1.6F;
+                            avoidY += (zy / zDist) * weight * 1.6F;
+                            if (zDist < 14.0F)
+                                closeZombie = true;
+                        }
+                    }
+
+                    float finalX = directionX * (closeZombie ? 0.6F : 1.2F) + avoidX;
+                    float finalY = directionY * (closeZombie ? 0.6F : 1.2F) + avoidY;
+                    float finalLen = distanceBetween(finalX, finalY);
+
+                    if (finalLen > 0.01F) {
+                        u.vx = (finalX / finalLen) * RUN_SPEED;
+                        u.vy = (finalY / finalLen) * RUN_SPEED;
+                    }
+                } else if (distanceBetween(directionX, directionY) > 0.01F) {
+                    u.vx = directionX * RUN_SPEED;
+                    u.vy = directionY * RUN_SPEED;
+                }
+
+                // Эвакуируем не инфицированных
+                float distToExit = static_cast<float>(
+                    distanceBetween(u.x - targetEvac->evacPos.x(), u.y - targetEvac->evacPos.y()));
+                if (distToExit <= 5.0F) {
+                    if (!targetEvac->completed && !u.isInfected
+                        && targetEvac->boardedCount < g_generator.level.evac_capacity) {
+                        targetEvac->boardedCount++;
+                        g_evacuatedTotalCount++;
+                        g_budget += 5.0; // За каждого юнита 5 руб
+
+                        float rAngle = static_cast<float>(rng->generateDouble() * 6.28318);
+                        float rDist = static_cast<float>(std::sqrt(rng->generateDouble()) * 7.5);
+                        targetEvac->passengerOffsets
+                            .push_back(QPointF(std::cos(rAngle) * rDist, std::sin(rAngle) * rDist));
+
+                        u.hp = 0;
+                        if (targetEvac->boardedCount >= g_generator.level.evac_capacity) {
+                            targetEvac->completed = true;
+                        }
+                        emit statsChanged();
+                    } else {
+                        u.waypoints.clear();
+                        u.state = UnitState::Walking;
+                        u.stateTimerSec = 2.0F;
+                    }
+                }
+            } else { // Если не нашлась точка эвакуации к которой идёт юнит
                 u.state = UnitState::Walking;
-                u.stateTimerSec = 4.0F;
-                u.waypoints.clear();
+                u.stateTimerSec = 2.0F;
             }
         }
-        return;
-    }
 
-    // Вспомогательная лямбда: если юнит сейчас в здании, добавляем путь выхода по тропинке перед основным маршрутом
-    auto prependExitPathIfInside = [&](std::vector<QPointF> &path) {
-        if (u.insideBuildingId >= 0 && u.insideBuildingId < static_cast<int>(buildings.size())) {
-            const auto &currB = buildings[u.insideBuildingId];
-            std::vector<QPointF> exitPts;
-            for (int i = static_cast<int>(currB.pathFromRoad.size()) - 1; i >= 0; --i) {
-                exitPts.push_back(currB.pathFromRoad[i]);
+        // ДВИЖЕНИЕ НА РАБОТУ / ДОМОЙ
+        // Если житель шёл на работу, но рабочее время уже закончилось (или наоборот) — сразу перестраиваемся
+        if ((u.state == UnitState::GoingToWork && !shouldBeAtWork)
+            || (u.state == UnitState::GoingHome && shouldBeAtWork)) {
+            u.stateTimerSec = 0.0F;
+        } else if (u.state == UnitState::GoingToWork || u.state == UnitState::GoingHome) {
+            if (!u.waypoints.empty()) {
+                QPointF baseTarget = u.waypoints.front();
+                float dx = static_cast<float>(baseTarget.x()) - u.x;
+                float dy = static_cast<float>(baseTarget.y()) - u.y;
+                float dist = distanceBetween(dx, dy);
+
+                int gx = std::clamp(static_cast<int>(u.x), 0, mapW - 1);
+                int gy = std::clamp(static_cast<int>(u.y), 0, mapH - 1);
+                bool onMainRoad = (walkGrid[gy * mapW + gx] == 1);
+                float reachR = onMainRoad ? (roadWidth() * 0.35F) : 1.5F;
+
+                if (dist < reachR) {
+                    u.waypoints.erase(u.waypoints.begin());
+                } else {
+                    u.vx = dx / dist * BASE_CITIZEN_SPEED;
+                    u.vy = dy / dist * BASE_CITIZEN_SPEED;
+                }
             }
-            path.insert(path.begin(), exitPts.begin(), exitPts.end());
-        }
-    };
-
-    // --- 2. СМЕНА РАСПОРЯДКА (ПОРА НА РАБОТУ / ПОРА ДОМОЙ) ---
-    // Если юнит гуляет (Walking), переключаем его на работу/дом только когда он уже вышел на дорогу (waypoints пусты)
-    bool canSwitchFromWalk = (u.state == UnitState::Walking && u.waypoints.empty()
-                              && u.stateTimerSec <= 0.0F);
-
-    if (shouldBeAtWork
-        && (u.state == UnitState::AtHome || u.state == UnitState::GoingHome || canSwitchFromWalk)) {
-        int workId = findNearestAvailableBuilding(u.x, u.y, true);
-        if (workId != -1) {
-            buildings[workId].reservedOccupants++; // Мгновенная бронь места!
-            u.targetBuildingId = workId;
-            u.state = UnitState::GoingToWork;
-            u.waypoints = buildPathToBuilding(QPointF(u.x, u.y), buildings[workId]);
-            prependExitPathIfInside(u.waypoints);
-            return;
-        } else if (u.state != UnitState::Walking) {
-            u.state = UnitState::Walking;
-            u.stateTimerSec = 5.0F;
-            u.waypoints.clear();
-            prependExitPathIfInside(u.waypoints);
-            return;
-        }
-    } else if (!shouldBeAtWork
-               && (u.state == UnitState::Working || u.state == UnitState::GoingToWork
-                   || canSwitchFromWalk)) {
-        int homeId = findNearestAvailableBuilding(u.x, u.y, false);
-        if (homeId != -1) {
-            buildings[homeId].reservedOccupants++; // Мгновенная бронь места!
-            u.targetBuildingId = homeId;
-            u.state = UnitState::GoingHome;
-            u.waypoints = buildPathToBuilding(QPointF(u.x, u.y), buildings[homeId]);
-            prependExitPathIfInside(u.waypoints);
-            return;
-        } else if (u.state != UnitState::Walking) {
-            u.state = UnitState::Walking;
-            u.stateTimerSec = 5.0F;
-            u.waypoints.clear();
-            prependExitPathIfInside(u.waypoints);
-            return;
-        }
-    }
-
-    // --- 3. БЛУЖДАНИЕ ВНУТРИ ЗДАНИЯ (КАК В WALKING, НО СО СНИЖЕННОЙ СКОРОСТЬЮ) ---
-    if (u.state == UnitState::Working || u.state == UnitState::AtHome) {
-        u.stateTimerSec -= dt;
-        if (u.stateTimerSec <= 0.0F) {
-            u.state = UnitState::Walking;
-            u.stateTimerSec = static_cast<float>(6 + rng->bounded(9));
-            u.waypoints.clear();
-            prependExitPathIfInside(u.waypoints);
-            return;
+            // Юнит пересёк порог нужного ему здания — он на месте!
+            if (isInsideBuilding && u.insideBuildingId == u.targetBuildingId) {
+                u.state = u.state == UnitState::GoingToWork ? UnitState::Working
+                                                            : UnitState::AtHome;
+                u.stateTimerSec = static_cast<float>(15 + rng->bounded(21));
+                //  На свякий случай оставляем лишь одну точку в центре здания
+                u.waypoints = {QPointF(buildings[u.targetBuildingId].cx,
+                                       buildings[u.targetBuildingId].cy)};
+            }
         }
 
-        if (u.insideBuildingId >= 0 && u.insideBuildingId < static_cast<int>(buildings.size())) {
-            float indoorSpeed = BASE_CITIZEN_SPEED;
+        // ДВИЖЕНИЕ ПО ЗДАНИЮ НА РАБОТЕ ИЛИ ДОМА
+        if (isInsideBuilding
+            && ((u.state == UnitState::Working && !isHomeBuilding)
+                || (u.state == UnitState::AtHome && isHomeBuilding))) {
+            // Задаём новое случайное направление
 
-            // Если скорость упала или сработал случайный поворот (как в Walking) — задаём новое случайное направление
-            float curSpd = std::hypot(u.vx, u.vy);
-            if (curSpd < 0.5F || rng->bounded(100) < 5) {
+            float speed = distanceBetween(u.vx, u.vy);
+            if (!u.waypoints.empty()) {
+                QPointF target = u.waypoints.front();
+                float dx = static_cast<float>(target.x()) - u.x;
+                float dy = static_cast<float>(target.y()) - u.y;
+                float dist = distanceBetween(dx, dy);
+                if (dist < 3.0F) { // дошёл до примерного центра комнаты
+                    u.waypoints.clear();
+                } else if (dist > 0.01F) {
+                    u.vx = (dx / dist) * BASE_CITIZEN_SPEED;
+                    u.vy = (dy / dist) * BASE_CITIZEN_SPEED;
+                }
+
+            } else if (speed < 0.5F || rng->bounded(100) < 5) {
                 float angle = static_cast<float>(rng->generateDouble() * 6.28318);
-                u.vx = std::cos(angle) * indoorSpeed;
-                u.vy = std::sin(angle) * indoorSpeed;
+                u.vx = std::cos(angle) * BASE_CITIZEN_SPEED;
+                u.vy = std::sin(angle) * BASE_CITIZEN_SPEED;
             } else {
-                u.vx = (u.vx / curSpd) * indoorSpeed;
-                u.vy = (u.vy / curSpd) * indoorSpeed;
+                u.vx = (u.vx / speed) * BASE_CITIZEN_SPEED;
+                u.vy = (u.vy / speed) * BASE_CITIZEN_SPEED;
             }
 
-            // Не даём юниту случайно выбрести в дверной проём (walkGrid == 2) во время прогулки по комнате
-            float lookAheadX = u.x + (u.vx / indoorSpeed) * 2.0F;
-            float lookAheadY = u.y + (u.vy / indoorSpeed) * 2.0F;
+            // Не даём юниту случайно выйти в дверной проём (walkGrid == 2) во время прогулки по комнате
+            float lookAheadX = u.x + (u.vx / BASE_CITIZEN_SPEED) * 2.0F;
+            float lookAheadY = u.y + (u.vy / BASE_CITIZEN_SPEED) * 2.0F;
             int lx = std::clamp(static_cast<int>(lookAheadX), 0, mapW - 1);
             int ly = std::clamp(static_cast<int>(lookAheadY), 0, mapH - 1);
+            // Разворачиваемся к центру текущего здания если движется в дверь
             if (walkGrid[ly * mapW + lx] != 10 + u.insideBuildingId) {
-                // Разворачиваемся к центру текущего здания
                 const auto &b = buildings[u.insideBuildingId];
                 float toCenterAngle = std::atan2(b.cy - u.y, b.cx - u.x)
                                       + static_cast<float>((rng->generateDouble() - 0.5) * 1.2);
-                u.vx = std::cos(toCenterAngle) * indoorSpeed;
-                u.vy = std::sin(toCenterAngle) * indoorSpeed;
+                u.vx = std::cos(toCenterAngle) * BASE_CITIZEN_SPEED;
+                u.vy = std::sin(toCenterAngle) * BASE_CITIZEN_SPEED;
             }
-        } else {
-            u.state = UnitState::Walking;
-            u.stateTimerSec = 2.0F;
         }
-        return;
+
+        // ДВИЖЕНИЕ НА ПРОГУЛКЕ
+        if (u.state == UnitState::Walking && u.panicTimerSec <= 0.0F) {
+            // Идём по текущему маршруту прогулки
+            if (!u.waypoints.empty()) {
+                QPointF target = u.waypoints.front();
+                float dx = static_cast<float>(target.x()) - u.x;
+                float dy = static_cast<float>(target.y()) - u.y;
+                float dist = distanceBetween(dx, dy);
+
+                int gx = std::clamp(static_cast<int>(u.x), 0, mapW - 1);
+                int gy = std::clamp(static_cast<int>(u.y), 0, mapH - 1);
+                bool onMainRoad = (walkGrid[gy * mapW + gx] == 1);
+                float reachR = (onMainRoad && u.waypoints.size() > 1) ? (roadWidth() * 0.35F)
+                                                                      : 1.5F;
+
+                if (dist < reachR) {
+                    u.waypoints.erase(u.waypoints.begin());
+                } else {
+                    u.vx = (dx / dist) * BASE_CITIZEN_SPEED;
+                    u.vy = (dy / dist) * BASE_CITIZEN_SPEED;
+                }
+            } else { // Если маршрута нет / закончен -> создать
+                const auto &nodes = g_generator.nodes();
+                if (!nodes.empty()) {
+                    // Случайный перекрёсток на карте
+                    int randNode = rng->bounded(static_cast<int>(nodes.size()));
+                    for (int attempt = 0; attempt < 10 && nodes[randNode].isAlleyNode; ++attempt) {
+                        randNode = rng->bounded(static_cast<int>(nodes.size()));
+                    }
+
+                    u.waypoints = buildPathBetween(QPointF(u.x, u.y), nodes[randNode].pos);
+                }
+            }
+        }
     }
 
-    // --- 4. СВОБОДНАЯ ПРОГУЛКА ---
-    if (u.state == UnitState::Walking) {
-        u.stateTimerSec -= dt;
+    // --- ДЕЙСТВИЯ ПО ИСТЕЧЕНИЮ ТАЙМЕРА СОСТОЯНИЙ stateTimerSec ---
+    if (u.stateTimerSec <= 0.0F) { // Заканчивает свои дела
 
-        // Идём по текущему маршруту прогулки
-        if (!u.waypoints.empty()) {
-            QPointF target = u.waypoints.front();
-            float dx = static_cast<float>(target.x()) - u.x;
-            float dy = static_cast<float>(target.y()) - u.y;
-            float dist = std::hypot(dx, dy);
-
-            int gx = std::clamp(static_cast<int>(u.x), 0, mapW - 1);
-            int gy = std::clamp(static_cast<int>(u.y), 0, mapH - 1);
-            bool onMainRoad = (walkGrid[gy * mapW + gx] == 1);
-            float reachR = (onMainRoad && u.waypoints.size() > 1) ? (roadWidth() * 0.35F) : 1.5F;
-
-            if (dist < reachR) {
-                u.waypoints.erase(u.waypoints.begin());
-            } else {
-                u.vx = (dx / dist) * BASE_CITIZEN_SPEED;
-                u.vy = (dy / dist) * BASE_CITIZEN_SPEED;
-            }
-            return;
-        }
-
-        // Если время прогулки ещё не вышло — сначала выходим из здания (если внутри), затем гуляем по узлам
-        if (u.stateTimerSec > 0.0F) {
-            if (u.insideBuildingId >= 0 && u.insideBuildingId < static_cast<int>(buildings.size())) {
-                prependExitPathIfInside(u.waypoints);
+        // СМЕНА РАСПОРЯДКА (ПОРА НА РАБОТУ / ПОРА ДОМОЙ)
+        if (((u.state == UnitState::Working || u.state == UnitState::GoingToWork) && !shouldBeAtWork)
+            || ((u.state == UnitState::AtHome || u.state == UnitState::GoingHome) && shouldBeAtWork)
+            || u.state == UnitState::Walking) {
+            int bId = findNearestAvailableBuilding(u.x, u.y, shouldBeAtWork);
+            if (bId != -1) {
+                buildings[bId].reservedOccupants++; // Бронь места!
+                u.targetBuildingId = bId;
+                u.state = shouldBeAtWork ? UnitState::GoingToWork : UnitState::GoingHome;
+                u.waypoints = buildPathBetween(u.x, u.y, buildings[bId].cx, buildings[bId].cy);
+                return;
+            } else { // Не нашёл здания, гуляет
+                u.waypoints.clear();
+                u.state = UnitState::Walking;
+                u.stateTimerSec = 5.0F + rng->bounded(21);
                 return;
             }
-            const auto &nodes = g_generator.nodes();
-            if (!nodes.empty()) {
-                int randNode = rng->bounded(static_cast<int>(nodes.size()));
-                u.waypoints = buildPathBetween(QPointF(u.x, u.y), nodes[randNode].pos);
-            }
-            return;
         }
 
-        // Время прогулки истекло — возвращаемся к рабочему/домашнему расписанию
-        int bId = findNearestAvailableBuilding(u.x, u.y, shouldBeAtWork);
-        if (bId != -1) {
-            u.targetBuildingId = bId;
-            buildings[bId].reservedOccupants++;
-            u.state = shouldBeAtWork ? UnitState::GoingToWork : UnitState::GoingHome;
-            u.waypoints = buildPathToBuilding(QPointF(u.x, u.y), buildings[bId]);
-            prependExitPathIfInside(u.waypoints);
-        } else {
-            u.stateTimerSec = 5.0F;
-        }
-        return;
-    }
+        // НУЖНО ВЫЙТИ НА ПРОГУЛКУ
+        if (isInsideBuilding) {
+            bool isHomeBuilding = buildings[u.insideBuildingId].type == BuildingType::Residential;
+            if ((u.state == UnitState::Working && !isHomeBuilding)
+                || (u.state == UnitState::AtHome && isHomeBuilding)) {
+                // Если он находится в нужном здании:
 
-    // --- 5. ДВИЖЕНИЕ К ЦЕЛЕВОМУ ЗДАНИЮ ---
-    if (u.state == UnitState::GoingToWork || u.state == UnitState::GoingHome) {
-        bool wantWork = (u.state == UnitState::GoingToWork);
+                u.waypoints.clear();
 
-        // Как только юнит пересёк порог и ступил на пол целевого здания — он на месте!
-        if (u.targetBuildingId >= 0 && u.insideBuildingId == u.targetBuildingId) {
-            const auto &targetB = buildings[u.targetBuildingId];
-            u.waypoints.clear();
-            u.state = wantWork ? UnitState::Working : UnitState::AtHome;
-            u.stateTimerSec = static_cast<float>(15 + rng->bounded(21));
-
-            // Направляем юнита от двери вглубь комнаты
-            float toCenter = std::atan2(targetB.cy - u.y, targetB.cx - u.x)
-                             + static_cast<float>((rng->generateDouble() - 0.5) * 1.4);
-            u.vx = std::cos(toCenter) * BASE_CITIZEN_SPEED;
-            u.vy = std::sin(toCenter) * BASE_CITIZEN_SPEED;
-            return;
-        }
-
-        float rw = roadWidth();
-        if (!u.waypoints.empty()) {
-            QPointF baseTarget = u.waypoints.front();
-            float dx = static_cast<float>(baseTarget.x()) - u.x;
-            float dy = static_cast<float>(baseTarget.y()) - u.y;
-            float dist = std::hypot(dx, dy);
-
-            int gx = std::clamp(static_cast<int>(u.x), 0, mapW - 1);
-            int gy = std::clamp(static_cast<int>(u.y), 0, mapH - 1);
-            bool onMainRoad = (walkGrid[gy * mapW + gx] == 1);
-            float reachRadius = onMainRoad ? (rw * 0.35F) : 1.5F;
-
-            if (dist < reachRadius) {
-                u.waypoints.erase(u.waypoints.begin());
-            } else {
-                float targetX = static_cast<float>(baseTarget.x());
-                float targetY = static_cast<float>(baseTarget.y());
-
-                if (onMainRoad) {
-                    float perpX = -dy / dist;
-                    float perpY = dx / dist;
-                    float shift = u.laneOffset * rw;
-                    float shiftedX = targetX + perpX * shift;
-                    float shiftedY = targetY + perpY * shift;
-                    if (isWalkable(shiftedX, shiftedY)) {
-                        targetX = shiftedX;
-                        targetY = shiftedY;
-                    }
-                }
-
-                float tdx = targetX - u.x;
-                float tdy = targetY - u.y;
-                float tdist = std::hypot(tdx, tdy);
-                if (tdist > 0.1F) {
-                    u.vx = (tdx / tdist) * BASE_CITIZEN_SPEED;
-                    u.vy = (tdy / tdist) * BASE_CITIZEN_SPEED;
-                }
-            }
-        } else {
-            if (u.targetBuildingId >= 0 && u.targetBuildingId < static_cast<int>(buildings.size())) {
-                const auto &targetB = buildings[u.targetBuildingId];
-                if (targetB.currentOccupants < targetB.capacity && targetB.health > 0
-                    && !targetB.isBurning && !targetB.isBurnedOut) {
-                    float dx = targetB.cx - u.x;
-                    float dy = targetB.cy - u.y;
-                    float dist = std::hypot(dx, dy);
-                    if (dist > 0.1F) {
-                        u.vx = (dx / dist) * BASE_CITIZEN_SPEED;
-                        u.vy = (dy / dist) * BASE_CITIZEN_SPEED;
-                    }
-                    return;
-                }
-            }
-
-            int nextBId = findNearestAvailableBuilding(u.x, u.y, wantWork);
-            if (nextBId != -1) {
-                u.targetBuildingId = nextBId;
-                u.waypoints = buildPathToBuilding(QPointF(u.x, u.y), buildings[nextBId]);
-                prependExitPathIfInside(u.waypoints);
-            } else {
+                // В следующий раз он выйдет на прогулку
                 u.state = UnitState::Walking;
-                u.stateTimerSec = 10.0F;
+                u.stateTimerSec = static_cast<float>(4 + rng->bounded(9));
+                return;
             }
         }
     }
 }
+
 void GameWorld::infectUnit(Unit &u, bool immediateZombie)
 {
     if (u.type == UnitType::Zombie || u.type == UnitType::Vaccinated || u.type == UnitType::Soldier)
@@ -394,8 +321,8 @@ void GameWorld::infectUnit(Unit &u, bool immediateZombie)
         // Сбрасываем старый след и маршрут у зомби, преследовавших этого жителя
         for (auto &other : g_units) {
             if (other.type == UnitType::Zombie && other.hasLastKnownTarget) {
-                float d = static_cast<float>(std::hypot(other.lastKnownTargetPos.x() - u.x,
-                                                        other.lastKnownTargetPos.y() - u.y));
+                float d = static_cast<float>(distanceBetween(other.lastKnownTargetPos.x() - u.x,
+                                                             other.lastKnownTargetPos.y() - u.y));
                 if (d < 15.0F) {
                     other.hasLastKnownTarget = false;
                     other.waypoints.clear();
@@ -445,12 +372,12 @@ void GameWorld::applyFireAvoidanceAndDamage(Unit &u,
 //             float awayY = dy / dist;
 //             float tangentX = -awayY;
 //             float tangentY = awayX;
-//             float speed = std::hypot(u.vx, u.vy);
+//             float speed = distanceBetween(u.vx, u.vy);
 //             if (speed < BASE_CITIZEN_SPEED)
 //                 speed = RUN_SPEED;
 //             float steerX = awayX * 1.4F + tangentX * 0.6F;
 //             float steerY = awayY * 1.4F + tangentY * 0.6F;
-//             float steerLen = std::hypot(steerX, steerY);
+//             float steerLen = distanceBetween(steerX, steerY);
 //             u.vx = (steerX / steerLen) * speed;
 //             u.vy = (steerY / steerLen) * speed;
 //         }
@@ -471,10 +398,10 @@ void GameWorld::applyWallRepulsion(Unit &u, float dt)
     if (!isWalkable(u.x, u.y - probeDist))
         pushY += pushStrength;
     if (pushX != 0.0F || pushY != 0.0F) {
-        float targetSpeed = std::hypot(u.vx, u.vy);
+        float targetSpeed = distanceBetween(u.vx, u.vy);
         u.vx += pushX * dt;
         u.vy += pushY * dt;
-        float newSpeed = std::hypot(u.vx, u.vy);
+        float newSpeed = distanceBetween(u.vx, u.vy);
         if (newSpeed > 0.01F && targetSpeed > 0.01F) {
             u.vx = (u.vx / newSpeed) * targetSpeed;
             u.vy = (u.vy / newSpeed) * targetSpeed;

@@ -32,7 +32,7 @@ enum class UnitState : uint8_t {
     Working = 1,
     GoingHome = 2,
     AtHome = 3,
-    Walking = 4,
+    Walking = 4,        // Бездельничает
     Evacuating = 5,     // Спокойно бежит к точке эвакуации
     PanicEvacuating = 6 // Паникует И одновременно прорывается к точке эвакуации
 };
@@ -87,7 +87,8 @@ struct RoadNode
     int id;
     QPointF pos;
     bool isEvacExit = false;
-    QString evacName; // Название выхода
+    bool isAlleyNode = false; // true для узлов переулков и тропинок к зданиям
+    QString evacName;         // Название выхода
 };
 
 struct RoadEdge
@@ -279,6 +280,7 @@ struct Unit
     float fireDamageCooldownSec = 0.0F; // Перезарядка урона от огня (0.5 сек)
     float stuckTimerSec = 0.0F;
     QPointF lastCheckPos;
+    int repathCount = 0; // Попытки следовать по маршруту если застреваещь (Анти-застревание)
 
     float lifeTimerSec = 0.0F; // Таймер службы десантника (90 сек)
     bool isRetreating = false; // True, когда 90 сек истекли и солдат идёт на эвакуацию

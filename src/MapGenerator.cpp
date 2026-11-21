@@ -105,7 +105,7 @@ bool MapGenerator::generateFromLevel(const LevelDefinition &newLevel)
                 QPointF bestEnd = ends[0];
                 float bestDist = 1e9f;
                 for (const auto &e : ends) {
-                    float d = static_cast<float>(std::hypot(e.x() - s.x(), e.y() - s.y()));
+                    float d = static_cast<float>(distanceBetween(e.x() - s.x(), e.y() - s.y()));
                     if (d < bestDist) {
                         bestDist = d;
                         bestEnd = e;
@@ -130,7 +130,8 @@ bool MapGenerator::generateFromLevel(const LevelDefinition &newLevel)
         for (size_t j = i + 1; j < nodesList.size(); ++j) {
             float dx = static_cast<float>(nodesList[i].pos.x() - nodesList[j].pos.x());
             float dy = static_cast<float>(nodesList[i].pos.y() - nodesList[j].pos.y());
-            candidates.push_back({static_cast<int>(i), static_cast<int>(j), std::hypot(dx, dy)});
+            candidates
+                .push_back({static_cast<int>(i), static_cast<int>(j), distanceBetween(dx, dy)});
         }
     }
 
@@ -376,7 +377,7 @@ bool MapGenerator::tryPlaceBuilding(
         QPointF p1 = nodesList[edge.fromId].pos;
         QPointF p2 = nodesList[edge.toId].pos;
         QPointF mid = (p1 + p2) * 0.5;
-        float d = static_cast<float>(std::hypot(mid.x() - x, mid.y() - y));
+        float d = static_cast<float>(distanceBetween(mid.x() - x, mid.y() - y));
         if (d < bestDist) {
             bestDist = d;
             angle = std::atan2(static_cast<float>(p2.y() - p1.y()),
@@ -688,13 +689,13 @@ void MapGenerator::buildBuildingInteriorsAndPaths()
         }
     }
 
-    // Маска корпусов зданий (чтобы тропинки огибали дома, а не резали их насквозь)
+    // Маска корпусов зданий (строго по габаритам стен, чтобы не сужать переулки)
     std::vector<uint8_t> buildingSolidMask(mapWidth * mapHeight, 0);
     for (const auto &b : buildingsList) {
         float cosA = std::cos(b.angleRad);
         float sinA = std::sin(b.angleRad);
-        float hw = b.width * 0.5F + 1.0F;
-        float hh = b.height * 0.5F + 1.0F;
+        float hw = b.width * 0.5F;
+        float hh = b.height * 0.5F;
 
         for (float ly = -hh; ly <= hh; ly += 0.5F) {
             for (float lx = -hw; lx <= hw; lx += 0.5F) {
@@ -714,7 +715,8 @@ void MapGenerator::buildBuildingInteriorsAndPaths()
             QPointF p1 = nodesList[edge.fromId].pos;
             QPointF p2 = nodesList[edge.toId].pos;
             QPointF mid = (p1 + p2) * 0.5;
-            best = std::min(best, std::hypot(mid.x() - b.cx, mid.y() - b.cy));
+            best = std::min(best,
+                            static_cast<double>(distanceBetween(mid.x() - b.cx, mid.y() - b.cy)));
         }
         return best;
     };
@@ -764,36 +766,104 @@ void MapGenerator::buildBuildingInteriorsAndPaths()
 
     auto rasterizeSinglePathToWalkMap = [&](const std::vector<QPointF> &pts) {
         float halfW = level.roadWidthMetersToBuilding * 0.5F;
-        int r = std::max(1, static_cast<int>(std::ceil(halfW)));
+        int r = std::max(1, static_cast<int>(std::ceil(halfW + 0.5F)));
 
         for (size_t i = 0; i + 1 < pts.size(); ++i) {
             QPointF p1 = pts[i];
             QPointF p2 = pts[i + 1];
-            float segLen = static_cast<float>(std::hypot(p2.x() - p1.x(), p2.y() - p1.y()));
-            int steps = std::max(1, static_cast<int>(std::ceil(segLen * 2.0F)));
+            float segLen = distanceBetween(static_cast<float>(p2.x() - p1.x()),
+                                           static_cast<float>(p2.y() - p1.y()));
+            int steps = std::max(1, static_cast<int>(std::ceil(segLen * 3.0F)));
 
             for (int s = 0; s <= steps; ++s) {
                 float t = static_cast<float>(s) / steps;
-                int cx = static_cast<int>(p1.x() + (p2.x() - p1.x()) * t);
-                int cy = static_cast<int>(p1.y() + (p2.y() - p1.y()) * t);
+                float fx = static_cast<float>(p1.x() + (p2.x() - p1.x()) * t);
+                float fy = static_cast<float>(p1.y() + (p2.y() - p1.y()) * t);
+                int cx = static_cast<int>(fx);
+                int cy = static_cast<int>(fy);
 
                 for (int dy = -r; dy <= r; ++dy) {
                     for (int dx = -r; dx <= r; ++dx) {
-                        if (dx * dx + dy * dy > r * r)
-                            continue;
                         int px = cx + dx;
                         int py = cy + dy;
-                        if (px >= 0 && px < mapWidth && py >= 0 && py < mapHeight) {
-                            int idx = py * mapWidth + px;
-                            if (cityMap[idx] == 1 && walkMap[idx] == 0
-                                && buildingSolidMask[idx] == 0) {
-                                walkMap[idx] = 2;
-                            }
+                        if (px < 0 || px >= mapWidth || py < 0 || py >= mapHeight)
+                            continue;
+
+                        float distX = (px + 0.5F) - fx;
+                        float distY = (py + 0.5F) - fy;
+                        if (distX * distX + distY * distY > halfW * halfW)
+                            continue;
+
+                        int idx = py * mapWidth + px;
+                        if (cityMap[idx] == 1 && walkMap[idx] == 0 && buildingSolidMask[idx] == 0) {
+                            walkMap[idx] = 2;
                         }
                     }
                 }
             }
         }
+    };
+
+    // Вспомогательная лямбда: привязывает точку pt к ближайшему существующему узлу или
+    // расщепляет ближайшее ребро в edgesList, возвращая ID узла графа
+    auto attachPointToRoadGraph = [&](QPointF pt) -> int {
+        // 1. Если рядом уже есть узел (в радиусе 2.5м) — переиспользуем его
+        int nearNode = -1;
+        float bestNodeDist = 2.5F;
+        for (const auto &node : nodesList) {
+            float d = distanceBetween(static_cast<float>(node.pos.x() - pt.x()),
+                                      static_cast<float>(node.pos.y() - pt.y()));
+            if (d < bestNodeDist) {
+                bestNodeDist = d;
+                nearNode = node.id;
+            }
+        }
+        if (nearNode != -1)
+            return nearNode;
+
+        // 2. Ищем ближайшее ребро (fromId, toId) в edgesList и проецируем pt на него
+        int bestEdgeIdx = -1;
+        float bestEdgeDist = 1e9F;
+        QPointF bestProj = pt;
+
+        for (size_t eIdx = 0; eIdx < edgesList.size(); ++eIdx) {
+            QPointF a = nodesList[edgesList[eIdx].fromId].pos;
+            QPointF b = nodesList[edgesList[eIdx].toId].pos;
+            float vx = static_cast<float>(b.x() - a.x());
+            float vy = static_cast<float>(b.y() - a.y());
+            float lenSq = vx * vx + vy * vy;
+            float t = (lenSq > 1e-5F) ? std::clamp(static_cast<float>((pt.x() - a.x()) * vx
+                                                                      + (pt.y() - a.y()) * vy)
+                                                       / lenSq,
+                                                   0.0F,
+                                                   1.0F)
+                                      : 0.0F;
+            QPointF proj(a.x() + vx * t, a.y() + vy * t);
+            float d = distanceBetween(static_cast<float>(pt.x() - proj.x()),
+                                      static_cast<float>(pt.y() - proj.y()));
+            if (d < bestEdgeDist) {
+                bestEdgeDist = d;
+                bestEdgeIdx = static_cast<int>(eIdx);
+                bestProj = proj;
+            }
+        }
+
+        RoadNode splitNode;
+        splitNode.id = static_cast<int>(nodesList.size());
+        splitNode.pos = bestProj;
+        splitNode.isEvacExit = false;
+        splitNode.isAlleyNode = true;
+        nodesList.push_back(splitNode);
+
+        if (bestEdgeIdx != -1) {
+            int u = edgesList[bestEdgeIdx].fromId;
+            int v = edgesList[bestEdgeIdx].toId;
+            // Заменяем старое ребро (u, v) на два: (u, splitNode) и (splitNode, v)
+            edgesList[bestEdgeIdx] = {u, splitNode.id};
+            edgesList.push_back({splitNode.id, v});
+        }
+
+        return splitNode.id;
     };
 
     std::vector<int> visited(mapWidth * mapHeight, -1);
@@ -833,19 +903,16 @@ void MapGenerator::buildBuildingInteriorsAndPaths()
                            b.cy + sides[s].localDoorX * sinA + sides[s].localDoorY * cosA);
             QPointF outPt(b.cx + sides[s].localOutX * cosA - sides[s].localOutY * sinA,
                           b.cy + sides[s].localOutX * sinA + sides[s].localOutY * cosA);
-
             int ox = static_cast<int>(outPt.x());
             int oy = static_cast<int>(outPt.y());
             if (ox < 0 || ox >= mapWidth || oy < 0 || oy >= mapHeight)
                 continue;
-
             int oIdx = oy * mapWidth + ox;
             if (cityMap[oIdx] == 0 || buildingSolidMask[oIdx] == 1)
                 continue;
-
             if (walkMap[oIdx] == 1 || walkMap[oIdx] == 2) {
                 float len = static_cast<float>(
-                    std::hypot(outPt.x() - doorPt.x(), outPt.y() - doorPt.y()));
+                    distanceBetween(outPt.x() - doorPt.x(), outPt.y() - doorPt.y()));
                 if (len < bestPathLength) {
                     bestPathLength = len;
                     bestSide = s;
@@ -853,36 +920,29 @@ void MapGenerator::buildBuildingInteriorsAndPaths()
                 }
                 continue;
             }
-
             searchRunId++;
             std::queue<int> q;
             q.push(oIdx);
             visited[oIdx] = searchRunId;
             parent[oIdx] = -1;
-
             int foundCell = -1;
             while (!q.empty()) {
                 int curr = q.front();
                 q.pop();
-
                 if (walkMap[curr] == 1 || walkMap[curr] == 2) {
                     foundCell = curr;
                     break;
                 }
-
                 int cx = curr % mapWidth;
                 int cy = curr / mapWidth;
-
                 for (int dir = 0; dir < 8; ++dir) {
                     int nx = cx + dxs[dir];
                     int ny = cy + dys[dir];
                     if (nx < 0 || nx >= mapWidth || ny < 0 || ny >= mapHeight)
                         continue;
-
                     int nCell = ny * mapWidth + nx;
                     if (visited[nCell] == searchRunId)
                         continue;
-
                     if (cityMap[nCell] == 1 && buildingSolidMask[nCell] == 0) {
                         visited[nCell] = searchRunId;
                         parent[nCell] = curr;
@@ -890,7 +950,6 @@ void MapGenerator::buildBuildingInteriorsAndPaths()
                     }
                 }
             }
-
             if (foundCell != -1) {
                 std::vector<QPointF> rawPath;
                 for (int c = foundCell; c != -1; c = parent[c]) {
@@ -898,11 +957,9 @@ void MapGenerator::buildBuildingInteriorsAndPaths()
                 }
                 rawPath.push_back(outPt);
                 rawPath.push_back(doorPt);
-
                 std::vector<QPointF> smoothPath;
                 smoothPath.push_back(rawPath.front());
                 size_t anchor = 0;
-
                 while (anchor + 1 < rawPath.size()) {
                     size_t furthest = anchor + 1;
                     for (size_t test = rawPath.size() - 1; test > anchor + 1; --test) {
@@ -917,8 +974,8 @@ void MapGenerator::buildBuildingInteriorsAndPaths()
                 float totalLen = 0.0F;
                 for (size_t i = 0; i + 1 < smoothPath.size(); ++i) {
                     totalLen += static_cast<float>(
-                        std::hypot(smoothPath[i + 1].x() - smoothPath[i].x(),
-                                   smoothPath[i + 1].y() - smoothPath[i].y()));
+                        distanceBetween(smoothPath[i + 1].x() - smoothPath[i].x(),
+                                        smoothPath[i + 1].y() - smoothPath[i].y()));
                 }
                 if (totalLen < bestPathLength) {
                     bestPathLength = totalLen;
@@ -928,33 +985,52 @@ void MapGenerator::buildBuildingInteriorsAndPaths()
             }
         }
         if (bestSide != -1 && bestSmoothPath.size() >= 2) {
-            // Продлеваем первый сегмент тропинки вглубь дороги на 40% ширины дороги,
+            // Продлеваем первый сегмент тропинки вглубь дороги/тропинки на 40% ширины,
             // чтобы на стыке не оставалось узкого угла бордюра
             QPointF p0 = bestSmoothPath[0];
             QPointF p1 = bestSmoothPath[1];
             float dx = static_cast<float>(p0.x() - p1.x());
             float dy = static_cast<float>(p0.y() - p1.y());
-            float len = std::hypot(dx, dy);
+            float len = distanceBetween(dx, dy);
             if (len > 0.01F) {
-                float extend = level.roadWidthMeters * 0.4F;
+                float extend = level.roadWidthMetersToBuilding * 0.4F;
                 QPointF deepRoadPt(p0.x() + (dx / len) * extend, p0.y() + (dy / len) * extend);
                 int rx = static_cast<int>(deepRoadPt.x());
                 int ry = static_cast<int>(deepRoadPt.y());
                 if (rx >= 0 && rx < mapWidth && ry >= 0 && ry < mapHeight
-                    && walkMap[ry * mapWidth + rx] == 1) {
+                    && (walkMap[ry * mapWidth + rx] == 1 || walkMap[ry * mapWidth + rx] == 2)) {
                     bestSmoothPath.insert(bestSmoothPath.begin(), deepRoadPt);
                 }
             }
-
+            // 3. Добавляем узлы соединения и все изгибы тропинки в единый граф nodesList / edgesList
+            int prevNodeId = attachPointToRoadGraph(bestSmoothPath.front());
+            for (size_t i = 1; i < bestSmoothPath.size(); ++i) {
+                QPointF pt = bestSmoothPath[i];
+                float segLen = distanceBetween(static_cast<float>(pt.x()
+                                                                  - nodesList[prevNodeId].pos.x()),
+                                               static_cast<float>(pt.y()
+                                                                  - nodesList[prevNodeId].pos.y()));
+                if (segLen < 0.5F)
+                    continue;
+                RoadNode alleyNode;
+                alleyNode.id = static_cast<int>(nodesList.size());
+                alleyNode.pos = pt;
+                alleyNode.isEvacExit = false;
+                alleyNode.isAlleyNode = true;
+                nodesList.push_back(alleyNode);
+                edgesList.push_back({prevNodeId, alleyNode.id});
+                prevNodeId = alleyNode.id;
+            }
+            b.nearestNodeId = prevNodeId; // Дверной узел здания в общем графе!
+            b.distToNode = 0.0F;
             b.doorCenter = bestSmoothPath.back();
             b.doorAngleRad = b.angleRad + sides[bestSide].sideAngleOffset;
             b.pathFromRoad = bestSmoothPath;
-            // Пробиваем дверной проём в стене шириной в тропинку и помечаем его как walkMap = 2
+            // Пробиваем дверной проём в стене шириной в тропинку
             QPointF outPt = bestSmoothPath[bestSmoothPath.size() - 2];
             float ddx = static_cast<float>(outPt.x()) - b.cx;
             float ddy = static_cast<float>(outPt.y()) - b.cy;
-            float dLen = std::hypot(ddx, ddy);
-            // Половина ширины проёма вдоль стены
+            float dLen = distanceBetween(ddx, ddy);
             float halfDoorW = level.roadWidthMetersToBuilding * 0.5F;
             float perpX = (dLen > 0.01F) ? (-ddy / dLen) : 0.0F;
             float perpY = (dLen > 0.01F) ? (ddx / dLen) : 0.0F;
@@ -967,8 +1043,6 @@ void MapGenerator::buildBuildingInteriorsAndPaths()
                         int py = static_cast<int>(baseY + perpY * wOff);
                         if (px >= 0 && px < mapWidth && py >= 0 && py < mapHeight) {
                             int idx = py * mapWidth + px;
-                            // Проём в стене сразу принадлежит полу здания (10 + b.id),
-                            // чтобы юнит мгновенно входил в здание при пересечении порога!
                             if (walkMap[idx] == 0) {
                                 walkMap[idx] = static_cast<int16_t>(10 + b.id);
                             }

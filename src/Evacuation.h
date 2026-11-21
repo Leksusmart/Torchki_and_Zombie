@@ -25,7 +25,7 @@ void GameWorld::updateEvacuations(float dt)
             // Эвакуация выполнена: конвой движется к конечной точке маршрута
             float dx = static_cast<float>(ev.convoyEnd.x() - ev.convoyPos.x());
             float dy = static_cast<float>(ev.convoyEnd.y() - ev.convoyPos.y());
-            float dist = std::hypot(dx, dy);
+            float dist = distanceBetween(dx, dy);
 
             if (dist < 4.0f) {
                 // Конвой достиг финишной точки (#A0FFFF / #5077FF) и исчезает
