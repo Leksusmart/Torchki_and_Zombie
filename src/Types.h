@@ -259,6 +259,7 @@ struct Unit
     float vx, vy;
     UnitType type;
     UnitState state = UnitState::Walking;
+    bool isEvacuated = false;
 
     int hp = 2; // Жители: 2, Солдаты: 3, Зомби: 5
     bool isInfected = false;

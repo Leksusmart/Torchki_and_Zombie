@@ -441,10 +441,6 @@ void GameWorld::fireAtTarget(Unit &soldier, size_t targetIdx)
 
     if (target.hp <= 0) {
         spawnBurstParticles(target.x, target.y, 8, 255, 60, 60);
-        if (target.type == UnitType::Zombie) {
-            g_eliminatedCount++;
-            g_budget += 5;
-        }
     }
 }
 

@@ -28,7 +28,7 @@ void GameWorld::updateEvacuations(float dt)
             float dist = distanceBetween(dx, dy);
 
             if (dist < 4.0f) {
-                // Конвой достиг финишной точки (#A0FFFF / #5077FF) и исчезает
+                // Конвой достиг финишной точки и исчезает
                 g_evacs.erase(g_evacs.begin() + i);
                 listDirty = true;
             } else {
@@ -51,7 +51,7 @@ void GameWorld::rebuildActiveEvacuationsList()
     QVariantList list;
     for (const auto &ev : g_evacs) {
         if (ev.completed)
-            continue; // После завершения круг 100м и таймер убираются
+            continue; // После завершения круг и таймер убираются
         QVariantMap m;
         m["x"] = ev.evacPos.x();
         m["y"] = ev.evacPos.y();

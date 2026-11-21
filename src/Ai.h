@@ -134,7 +134,9 @@ void GameWorld::updateCitizenSchedule(Unit &u, std::vector<BuildingObject> &buil
                         targetEvac->passengerOffsets
                             .push_back(QPointF(std::cos(rAngle) * rDist, std::sin(rAngle) * rDist));
 
+                        u.isEvacuated = true;
                         u.hp = 0;
+
                         if (targetEvac->boardedCount >= g_generator.level.evac_capacity) {
                             targetEvac->completed = true;
                         }

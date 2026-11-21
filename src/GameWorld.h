@@ -152,9 +152,11 @@ private: // переменные
     int g_selectedBuildingId = -1;
     int g_lastTrackedHour = -1;
     int g_evacuatedTotalCount = 0;
+    int g_lostCount = 0;
     int g_dayNumber = 1;
     int g_citizensCount = 0;
     int g_zombiesCount = 0;
+    int g_infectedCount = 0;
     int g_eliminatedCount = 0;
     int g_gridCols = 0;
     int g_gridRows = 0;
@@ -233,6 +235,7 @@ private:
     Q_PROPERTY(double incomePerSec READ incomePerSec NOTIFY statsChanged)
     Q_PROPERTY(int citizensCount READ citizensCount NOTIFY statsChanged)
     Q_PROPERTY(int zombiesCount READ zombiesCount NOTIFY statsChanged)
+    Q_PROPERTY(int infectedCount READ infectedCount NOTIFY statsChanged)
     Q_PROPERTY(int eliminatedCount READ eliminatedCount NOTIFY statsChanged)
     Q_PROPERTY(bool paused READ paused NOTIFY stateChanged)
     Q_PROPERTY(int speedMultiplier READ speedMultiplier NOTIFY stateChanged)
@@ -261,6 +264,7 @@ public:
     /*Q_PROPERTY*/ double incomePerSec() const { return g_incomePerSec; }
     /*Q_PROPERTY*/ int citizensCount() const { return g_citizensCount; }
     /*Q_PROPERTY*/ int zombiesCount() const { return g_zombiesCount; }
+    /*Q_PROPERTY*/ int infectedCount() const { return g_infectedCount; }
     /*Q_PROPERTY*/ int eliminatedCount() const { return g_eliminatedCount; }
     /*Q_PROPERTY*/ bool paused() const { return g_paused; }
     /*Q_PROPERTY*/ int speedMultiplier() const { return g_speedMultiplier; }
@@ -278,7 +282,10 @@ public:
     Q_INVOKABLE bool selectUnitAt(float worldX, float worldY, float radius = 8.0f);
     Q_INVOKABLE void regenerateMap();
     Q_INVOKABLE void togglePause();
-    Q_INVOKABLE void toggleSpeed();
+    Q_INVOKABLE void toggleSpeedTo1();
+    Q_INVOKABLE void toggleSpeedTo2();
+    Q_INVOKABLE void toggleSpeedTo3();
+    Q_INVOKABLE void toggleSpeedTo4();
     Q_INVOKABLE void useToolAt(float worldX, float worldY);
     Q_INVOKABLE QVariantMap snapEvacPoint(float worldX,
                                           float worldY,

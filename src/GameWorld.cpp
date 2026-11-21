@@ -44,6 +44,9 @@ void GameWorld::startLevel(const LevelConfig &config)
     // 2. Runtime-состояние
     g_budget = 300.0;
     g_eliminatedCount = 0;
+    g_evacuatedTotalCount = 0;
+    g_lostCount = 0;
+    g_infectedCount = 0;
     g_elapsedSimSec = 0.0f;
     g_timeOfDayHours = g_currentConfig.startHour;
     g_dayNumber = 1;
@@ -585,21 +588,37 @@ void GameWorld::tick()
 
     // 4. Удаляем погибших и обновляем счётчики
     int citizens = 0;
+    int infected = 0;
     int zombies = 0;
     for (size_t i = 0; i < g_units.size();) {
         if (g_units[i].hp <= 0) {
+            const Unit dead = g_units[i];
             g_units[i] = g_units.back();
             g_units.pop_back();
+
+            if (dead.type == UnitType::Zombie) {
+                g_budget += 5;
+                g_eliminatedCount++;
+            } else if ((dead.type == UnitType::Citizen || dead.type == UnitType::Vaccinated)
+                       && !dead.isEvacuated) {
+                g_lostCount++;
+            }
+            emit statsChanged();
         } else {
-            if (g_units[i].type == UnitType::Citizen || g_units[i].type == UnitType::Vaccinated)
+            if (g_units[i].type == UnitType::Citizen || g_units[i].type == UnitType::Vaccinated) {
                 citizens++;
-            else if (g_units[i].type == UnitType::Zombie)
+                if (g_units[i].isInfected) {
+                    infected++;
+                }
+            } else if (g_units[i].type == UnitType::Zombie)
                 zombies++;
             ++i;
         }
     }
-    if (citizens != g_citizensCount || zombies != g_zombiesCount) {
+
+    if (citizens != g_citizensCount || infected != g_infectedCount || zombies != g_zombiesCount) {
         g_citizensCount = citizens;
+        g_infectedCount = infected;
         g_zombiesCount = zombies;
         emit statsChanged();
     }
@@ -1847,12 +1866,26 @@ void GameWorld::updateSelectedBuildingInfo()
     emit stateChanged();
 }
 
-/*Вызывается из QML*/ void GameWorld::toggleSpeed()
+/*Вызывается из QML*/ void GameWorld::toggleSpeedTo1()
 {
-    g_speedMultiplier = (g_speedMultiplier == 1) ? 2 : 1;
+    g_speedMultiplier = 1;
     emit stateChanged();
 }
-
+/*Вызывается из QML*/ void GameWorld::toggleSpeedTo2()
+{
+    g_speedMultiplier = 2;
+    emit stateChanged();
+}
+/*Вызывается из QML*/ void GameWorld::toggleSpeedTo3()
+{
+    g_speedMultiplier = 3;
+    emit stateChanged();
+}
+/*Вызывается из QML*/ void GameWorld::toggleSpeedTo4()
+{
+    g_speedMultiplier = 4;
+    emit stateChanged();
+}
 /*Свойство для QML*/ QString GameWorld::formattedTime() const
 {
     int totalMinutes = static_cast<int>(g_timeOfDayHours * 60.0f);

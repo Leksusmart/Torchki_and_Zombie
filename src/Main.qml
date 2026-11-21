@@ -512,17 +512,17 @@ Window {
                                    }
 
                 onClicked: (mouse) => {
-                    if (gameWorld.selectedTool === 0) {
-                        let hitUnit = gameWorld.selectUnitAt(mouse.x, mouse.y, 7.0)
-                        if (hitUnit) {
-                            gameWorld.selectBuildingAt(-1000, -1000) // Скрываем оверлей здания
-                        } else {
-                            gameWorld.selectBuildingAt(mouse.x, mouse.y)
-                        }
-                    } else {
-                        gameWorld.useToolAt(mouse.x, mouse.y)
-                    }
-                }
+                               if (gameWorld.selectedTool === 0) {
+                                   let hitUnit = gameWorld.selectUnitAt(mouse.x, mouse.y, 7.0)
+                                   if (hitUnit) {
+                                       gameWorld.selectBuildingAt(-1000, -1000) // Скрываем оверлей здания
+                                   } else {
+                                       gameWorld.selectBuildingAt(mouse.x, mouse.y)
+                                   }
+                               } else {
+                                   gameWorld.useToolAt(mouse.x, mouse.y)
+                               }
+                           }
 
 
             }
@@ -626,135 +626,586 @@ Window {
             }
 
             onScaleChanged: (delta) => {
-                let oldScale = cameraContainer.scale
-                let newScale = Math.max(0.25, Math.min(5.0, startScale * activeScale))
-                if (newScale === oldScale) return
+                                let oldScale = cameraContainer.scale
+                                let newScale = Math.max(0.25, Math.min(5.0, startScale * activeScale))
+                                if (newScale === oldScale) return
 
-                // Точка между двумя пальцами в координатах viewport
-                let pivotX = centroid.position.x
-                let pivotY = centroid.position.y
+                                // Точка между двумя пальцами в координатах viewport
+                                let pivotX = centroid.position.x
+                                let pivotY = centroid.position.y
 
-                // Переводим эту точку в мировые координаты карты до изменения масштаба
-                let worldPivotX = (pivotX - cameraContainer.x) / oldScale
-                let worldPivotY = (pivotY - cameraContainer.y) / oldScale
+                                // Переводим эту точку в мировые координаты карты до изменения масштаба
+                                let worldPivotX = (pivotX - cameraContainer.x) / oldScale
+                                let worldPivotY = (pivotY - cameraContainer.y) / oldScale
 
-                // Применяем новый масштаб и удерживаем точку под пальцами на месте
-                cameraContainer.scale = newScale
-                cameraContainer.x = pivotX - worldPivotX * newScale
-                cameraContainer.y = pivotY - worldPivotY * newScale
-            }
+                                // Применяем новый масштаб и удерживаем точку под пальцами на месте
+                                cameraContainer.scale = newScale
+                                cameraContainer.x = pivotX - worldPivotX * newScale
+                                cameraContainer.y = pivotY - worldPivotY * newScale
+                            }
         }
 
     }
 
     // Верхняя панель статистики (HUD)
     Rectangle {
+        id: topHud
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 60
-        color: "#dd141923"
-        border.color: "#2d3748"
+        height: 58
+        color: "#ee0d1117"
+        border.color: "#262f3f"
         border.width: 1
+        z: 20
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 16
-            anchors.rightMargin: 16
-            spacing: 24
-            Text {
-                text: "День " + gameWorld.dayNumber + "  " + gameWorld.formattedTime + (gameWorld.isNight ? " (Ночь)" : " (День)")
-                color: gameWorld.isNight ? "#63b3ed" : "#f6e05e"
-                font.pixelSize: 14
-                font.bold: true
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
+            spacing: 8
+
+            // 1. Левый блок: Название уровня + время / день / сводка
+            Column {
+                Layout.alignment: Qt.AlignVCenter
+                Layout.rightMargin: 8
+                spacing: 2
+
+                Row {
+                    spacing: 6
+                    Text {
+                        text: "МАНХЭТТЕН"
+                        color: "#f7fafc"
+                        font.pixelSize: 13
+                        font.bold: true
+                        font.letterSpacing: 0.8
+                    }
+                    Text {
+                        text: "•"
+                        color: "#4a5568"
+                        font.pixelSize: 13
+                    }
+                    Text {
+                        text: gameWorld.isNight ? "НОЧЬ" : "ДЕНЬ"
+                        color: gameWorld.isNight ? "#63b3ed" : "#ecc94b"
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                }
+
+                Text {
+                    text: {
+                        var status = "День " + gameWorld.dayNumber + "  •  " + gameWorld.formattedTime
+                        if (gameWorld.zombiesCount > 0)
+                            status += "  •  Активных зомби: " + gameWorld.zombiesCount
+                        if (gameWorld.infectedCount > 0)
+                            status += "  •  Инфицированных: " + gameWorld.infectedCount
+                        if (gameWorld.zombiesCount === 0 && gameWorld.infectedCount === 0)
+                            status += "  •  Угроз не обнаружено (▀̿Ĺ̯▀̿ ̿)"
+                        return status
+                    }
+                    color: gameWorld.zombiesCount > 0 ? "#fc8181"
+                         : (gameWorld.infectedCount > 0 ? "#f6ad55" : "#9ae6b4")
+                    font.pixelSize: 10
+                    font.bold: true
+                }
+
             }
 
+            // 2. Центральные карточки статистики
+            Repeater {
+                model: [
+                    { title: "ЖИТЕЛИ", val: gameWorld.citizensCount, clr: "#e2e8f0" },
+                    { title: "ЗОМБИ", val: gameWorld.zombiesCount, clr: "#48bb78" },
+                    { title: "УБИТО", val: gameWorld.eliminatedCount, clr: "#ecc94b" },
+                    { title: "ЭВАКУИРОВАНО", val: gameWorld.evacuatedTotalCount, clr: "#4fd1c5" }
+                ]
 
-            Text { text: "Здоровые: " + gameWorld.citizensCount; color: "#e2e8f0"; font.pixelSize: 14; font.bold: true }
-            Text { text: "Зомби: " + gameWorld.zombiesCount; color: "#fc8181"; font.pixelSize: 14; font.bold: true }
-            Text { text: "Убито: " + gameWorld.eliminatedCount; color: "#68d391"; font.pixelSize: 14; font.bold: true }
+                delegate: Rectangle {
+                    Layout.preferredWidth: 104
+                    Layout.preferredHeight: 42
+                    color: "#141922"
+                    border.color: "#283244"
+                    border.width: 1
+                    radius: 2
+
+                    Column {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 2
+
+                        Row {
+                            spacing: 5
+                            Rectangle {
+                                width: 6; height: 6
+                                color: modelData.clr
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            Text {
+                                text: modelData.title
+                                color: "#8b9bb4"
+                                font.pixelSize: 9
+                                font.bold: true
+                            }
+                        }
+
+                        Text {
+                            text: modelData.val
+                            color: "#f7fafc"
+                            font.pixelSize: 14
+                            font.bold: true
+                        }
+                    }
+                }
+            }
 
             Item { Layout.fillWidth: true }
 
-            Column {
-                spacing: 1
-                Layout.alignment: Qt.AlignVCenter
+            // 3. Кнопка "ЗАНОВО"
+            Rectangle {
+                Layout.preferredWidth: 86
+                Layout.preferredHeight: 36
+                color: restartArea.containsMouse ? "#252e3f" : "#161b24"
+                border.color: "#3b475e"
+                border.width: 1
+                radius: 2
 
                 Text {
-                    text: "Бюджет"
-                    color: "#a0aec0"
-                    font.pixelSize: 10
+                    anchors.centerIn: parent
+                    text: "ЗАНОВО"
+                    color: "#e2e8f0"
+                    font.pixelSize: 11
+                    font.bold: true
+                }
+
+                MouseArea {
+                    id: restartArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        alertsModel.clear()
+                        alertsPanel.unreadCount = 0
+                        alertsPanel.lastIsNight = gameWorld.isNight
+                        gameWorld.regenerateMap()
+                        toolkitMenu.visible = true
+                    }
+
+                }
+            }
+
+            // 4. Кнопка "Улучшения"
+            Rectangle {
+                Layout.preferredWidth: 108
+                Layout.preferredHeight: 36
+                color: shopArea.containsMouse ? "#22543d" : "#17382b"
+                border.color: "#48bb78"
+                border.width: 1
+                radius: 2
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "УЛУЧШЕНИЯ"
+                    color: "#9ae6b4"
+                    font.pixelSize: 11
+                    font.bold: true
+                }
+
+                MouseArea {
+                    id: shopArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        if (!gameWorld.paused) {
+                            gameWorld.togglePause()
+                        }
+                        //toolkitMenu.visible = true TODO сделать магазин с улучшениями
+                    }
+                }
+            }
+
+            // 5. Блок Бюджета и дохода
+            Column {
+                Layout.alignment: Qt.AlignVCenter
+                Layout.leftMargin: 6
+                Layout.rightMargin: 4
+                spacing: 0
+
+                Text {
+                    text: "БЮДЖЕТ"
+                    color: "#8b9bb4"
+                    font.pixelSize: 9
                     font.bold: true
                     anchors.right: parent.right
                 }
                 Text {
                     text: gameWorld.budget.toLocaleString(Qt.locale("ru_RU"), "f", 0) + " ₽"
-                    color: "#48bb78"
-                    font.pixelSize: 16
+                    color: "#68d391"
+                    font.pixelSize: 15
                     font.bold: true
                     anchors.right: parent.right
                 }
                 Text {
                     text: "+" + gameWorld.incomePerSec.toFixed(0) + " ₽ / сек"
                     color: "#68d391"
-                    font.pixelSize: 11
+                    font.pixelSize: 9
                     anchors.right: parent.right
                 }
             }
 
+            // 6. Компактный блок управления временем (Пауза | 1x | 2x)
+            Row {
+                spacing: 2
+                Layout.alignment: Qt.AlignVCenter
 
-            Button {
-                text: gameWorld.paused ? "▶ Продолжить" : "⏸ Пауза"
-                palette.buttonText: "black"
-                onClicked: gameWorld.togglePause()
-            }
-            Button {
-                text: gameWorld.speedMultiplier + "x"
-                palette.buttonText: "black"
-                onClicked: gameWorld.toggleSpeed()
-            }
-            Button {
-                text: "Заново"
-                palette.buttonText: "black"
-                onClicked: {
-                    gameWorld.regenerateMap()
-                    toolkitMenu.visible = true
+                // Пауза
+                Rectangle {
+                    width: 30; height: 32
+                    color: gameWorld.paused ? "#2d3748" : "#141922"
+                    border.color: gameWorld.paused ? "#ecc94b" : "#2d3748"
+                    border.width: 1
+                    radius: 2
+                    Text {
+                        anchors.centerIn: parent
+                        text: "🛑"
+                        color: gameWorld.paused ? "#ecc94b" : "#a0aec0"
+                        font.pixelSize: 12
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (!gameWorld.paused) gameWorld.togglePause()
+                        }
+                    }
+                }
+
+                // Скорость 1x
+                Rectangle {
+                    width: 30; height: 32
+                    color: (!gameWorld.paused && gameWorld.speedMultiplier === 1) ? "#2b3648" : "#141922"
+                    border.color: (!gameWorld.paused && gameWorld.speedMultiplier === 1) ? "#63b3ed" : "#2d3748"
+                    border.width: 1
+                    radius: 2
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Ⅰ"
+                        color: (!gameWorld.paused && gameWorld.speedMultiplier === 1) ? "#ffffff" : "#a0aec0"
+                        font.pixelSize: 11
+                        font.bold: true
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (gameWorld.paused) gameWorld.togglePause()
+                            if (gameWorld.speedMultiplier !== 1) gameWorld.toggleSpeedTo1()
+                        }
+                    }
+                }
+
+                // Скорость 2x
+                Rectangle {
+                    width: 30; height: 32
+                    color: (!gameWorld.paused && gameWorld.speedMultiplier === 2) ? "#2b3648" : "#141922"
+                    border.color: (!gameWorld.paused && gameWorld.speedMultiplier === 2) ? "#63b3ed" : "#2d3748"
+                    border.width: 1
+                    radius: 2
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Ⅱ"
+                        color: (!gameWorld.paused && gameWorld.speedMultiplier === 2) ? "#ffffff" : "#a0aec0"
+                        font.pixelSize: 11
+                        font.bold: true
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (gameWorld.paused) gameWorld.togglePause()
+                            if (gameWorld.speedMultiplier !== 2) gameWorld.toggleSpeedTo2()
+                        }
+                    }
+                }
+                // Скорость 3x
+                Rectangle {
+                    width: 30; height: 32
+                    color: (!gameWorld.paused && gameWorld.speedMultiplier === 3) ? "#2b3648" : "#141922"
+                    border.color: (!gameWorld.paused && gameWorld.speedMultiplier === 3) ? "#63b3ed" : "#2d3748"
+                    border.width: 1
+                    radius: 2
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Ⅲ"
+                        color: (!gameWorld.paused && gameWorld.speedMultiplier === 3) ? "#ffffff" : "#a0aec0"
+                        font.pixelSize: 11
+                        font.bold: true
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (gameWorld.paused) gameWorld.togglePause()
+                            if (gameWorld.speedMultiplier !== 3) gameWorld.toggleSpeedTo3()
+                        }
+                    }
+                }
+                // Скорость 4x
+                Rectangle {
+                    width: 30; height: 32
+                    color: (!gameWorld.paused && gameWorld.speedMultiplier === 4) ? "#2b3648" : "#141922"
+                    border.color: (!gameWorld.paused && gameWorld.speedMultiplier === 4) ? "#63b3ed" : "#2d3748"
+                    border.width: 1
+                    radius: 2
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Ⅳ"
+                        color: (!gameWorld.paused && gameWorld.speedMultiplier === 4) ? "#ffffff" : "#a0aec0"
+                        font.pixelSize: 11
+                        font.bold: true
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (gameWorld.paused) gameWorld.togglePause()
+                            if (gameWorld.speedMultiplier !== 4) gameWorld.toggleSpeedTo4()
+                        }
+                    }
                 }
             }
-
         }
     }
 
     // Левая панель легенды юнитов
     Rectangle {
+        id: legendPanel
         anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.topMargin: 64
-        anchors.leftMargin: 12
-        width: 150
-        height: 175
-        color: "#cc141923"
+        anchors.top: topHud.bottom
+        anchors.topMargin: 8
+        anchors.leftMargin: 10
+        z: 18
+        property bool expanded: true
+        width: expanded ? 168 : 102
+        height: expanded ? (legendCol.implicitHeight + 16) : 28
+        color: "#e610151d"
         border.color: "#2d3748"
-        radius: 4
-
+        border.width: 1
+        radius: 2
         Column {
-            anchors.fill: parent
-            anchors.margins: 10
-            spacing: 8
-
+            id: legendCol
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 8
+            spacing: 7
+            // Заголовок-кнопка сворачивания
+            Item {
+                width: parent.width
+                height: 14
+                Text {
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "ЛЕГЕНДА"
+                    color: "#cbd5e0"
+                    font.pixelSize: 10
+                    font.bold: true
+                    font.letterSpacing: 0.6
+                }
+                Text {
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: legendPanel.expanded ? "−" : "+"
+                    color: "#90cdf4"
+                    font.pixelSize: 13
+                    font.bold: true
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -6
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: legendPanel.expanded = !legendPanel.expanded
+                }
+            }
+            Rectangle {
+                visible: legendPanel.expanded
+                width: parent.width
+                height: 1
+                color: "#262f3f"
+            }
             Repeater {
-                model: [
-                    { label: "Житель", clr: "#f0f0f0" },
-                    { label: "В панике", clr: "#ff7373" },
-                    { label: "Инфицирован", clr: "#ffaf2d" },
-                    { label: "Вакцинированный", clr: "#50b4ff" },
-                    { label: "Зомби", clr: "#46e678" },
-                    { label: "Солдаты", clr: "#50b4ff" }
-                ]
+                model: legendPanel.expanded ? [
+                                                  { label: "Житель", clr: "#f0f0f0" },
+                                                  { label: "В панике", clr: "#ff7373" },
+                                                  { label: "Инфицирован", clr: "#ffaf2d" },
+                                                  { label: "Вакцинированный", clr: "#50b4ff" },
+                                                  { label: "Зомби", clr: "#46e678" },
+                                                  { label: "Солдаты", clr: "#4191ff" }
+                                              ] : []
                 delegate: Row {
                     spacing: 8
-                    Rectangle { width: 10; height: 10; color: modelData.clr; anchors.verticalCenter: parent.verticalCenter }
-                    Text { text: modelData.label; color: "#cbd5e0"; font.pixelSize: 12 }
+                    Rectangle {
+                        width: 9; height: 9
+                        color: modelData.clr
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text: modelData.label
+                        color: "#cbd5e0"
+                        font.pixelSize: 11
+                    }
+                }
+            }
+        }
+    }
+    Rectangle {
+        id: alertsPanel
+        anchors.right: parent.right
+        anchors.top: topHud.bottom
+        anchors.topMargin: 8
+        anchors.rightMargin: 10
+        z: 18
+        property bool expanded: true
+        property int unreadCount: 0
+        property bool lastIsNight: gameWorld.isNight
+
+        Connections {
+            target: gameWorld
+            function onOutbreakOccurred(x, y, index) {
+                alertsModel.insert(0, {
+                    text: "ВСПЫШКА ЗАРАЖЕНИЯ #" + index + ": зафиксирован нулевой пациент в секторе ("
+                          + Math.round(x) + ", " + Math.round(y) + ").",
+                    accent: "#fc8181"
+                })
+                if (alertsModel.count > 6) alertsModel.remove(6)
+                if (!alertsPanel.expanded) alertsPanel.unreadCount++
+            }
+            function onIsNightChanged() {
+                if (alertsPanel.lastIsNight === gameWorld.isNight) return
+                alertsPanel.lastIsNight = gameWorld.isNight
+
+                var msg = gameWorld.isNight
+                    ? "Наступила ночь. Видимость снижена, следите за очагами пожаров."
+                    : "Наступил день " + gameWorld.dayNumber + ". Жители направляются на работу."
+                var clr = gameWorld.isNight ? "#63b3ed" : "#ecc94b"
+
+                alertsModel.insert(0, { text: msg, accent: clr })
+                if (alertsModel.count > 6) alertsModel.remove(6)
+                if (!alertsPanel.expanded) alertsPanel.unreadCount++
+            }
+        }
+
+        function clearAlerts() {
+            alertsModel.clear()
+            unreadCount = 0
+        }
+        ListModel {
+            id: alertsModel
+            ListElement {
+                text: "Оперативный штаб развёрнут. Отслеживайте вспышки инфекции и защищайте жителей."
+                accent: "#48bb78"
+            }
+        }
+
+        width: expanded ? 290 : 142
+        height: expanded ? (alertsCol.implicitHeight + 16) : 28
+        color: "#e610151d"
+        border.color: (!expanded && unreadCount > 0) ? "#fc8181" : "#2d3748"
+        border.width: 1
+        radius: 2
+        Column {
+            id: alertsCol
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 8
+            spacing: 6
+            // Заголовок-кнопка сворачивания
+            Item {
+                width: parent.width
+                height: 14
+                Row {
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 6
+                    Text {
+                        text: "УВЕДОМЛЕНИЯ"
+                        color: "#cbd5e0"
+                        font.pixelSize: 10
+                        font.bold: true
+                        font.letterSpacing: 0.6
+                    }
+                    Rectangle {
+                        visible: !alertsPanel.expanded && alertsPanel.unreadCount > 0
+                        width: 16; height: 14
+                        radius: 2
+                        color: "#e53e3e"
+                        Text {
+                            anchors.centerIn: parent
+                            text: alertsPanel.unreadCount
+                            color: "#ffffff"
+                            font.pixelSize: 9
+                            font.bold: true
+                        }
+                    }
+                }
+                Text {
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: alertsPanel.expanded ? "−" : "+"
+                    color: "#90cdf4"
+                    font.pixelSize: 13
+                    font.bold: true
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -6
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        alertsPanel.expanded = !alertsPanel.expanded
+                        if (alertsPanel.expanded) {
+                            alertsPanel.unreadCount = 0
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                visible: alertsPanel.expanded
+                width: parent.width
+                height: 1
+                color: "#262f3f"
+            }
+            // Список карточек уведомлений
+            Repeater {
+                model: alertsPanel.expanded ? alertsModel : null
+                delegate: Rectangle {
+                    width: alertsCol.width
+                    height: alertTxt.implicitHeight + 10
+                    color: "#151c26"
+                    border.color: "#283244"
+                    border.width: 1
+                    radius: 2
+                    Rectangle {
+                        width: 3
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        color: model.accent
+                    }
+                    Text {
+                        id: alertTxt
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 9
+                        anchors.rightMargin: 6
+                        text: model.text
+                        color: "#e2e8f0"
+                        font.pixelSize: 10
+                        wrapMode: Text.WordWrap
+                    }
                 }
             }
         }
