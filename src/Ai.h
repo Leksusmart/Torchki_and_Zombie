@@ -252,16 +252,31 @@ void GameWorld::updateCitizenSchedule(Unit &u, std::vector<BuildingObject> &buil
                     u.vx = (dx / dist) * BASE_CITIZEN_SPEED;
                     u.vy = (dy / dist) * BASE_CITIZEN_SPEED;
                 }
-            } else { // Если маршрута нет / закончен -> создать
+            } else if (u.stateTimerSec <= 0.0F || distanceBetween(u.vx, u.vy) < 1.0F) {
+                // Строим новый маршрут только по истечении таймера свободной прогулки
                 const auto &nodes = g_generator.nodes();
                 if (!nodes.empty()) {
-                    // Случайный перекрёсток на карте
                     int randNode = rng->bounded(static_cast<int>(nodes.size()));
                     for (int attempt = 0; attempt < 10 && nodes[randNode].isAlleyNode; ++attempt) {
                         randNode = rng->bounded(static_cast<int>(nodes.size()));
                     }
 
                     u.waypoints = buildPathBetween(QPointF(u.x, u.y), nodes[randNode].pos);
+                    if (u.waypoints.empty()) {
+                        // Замурован: плавно идём в свободном направлении 2.5 секунды без дёрганий
+                        float angle = static_cast<float>(rng->generateDouble() * 6.28318);
+                        for (int attempt = 0; attempt < 12; ++attempt) {
+                            float testAngle = static_cast<float>(rng->generateDouble() * 6.28318);
+                            if (isWalkable(u.x + std::cos(testAngle) * 10.0F,
+                                           u.y + std::sin(testAngle) * 10.0F)) {
+                                angle = testAngle;
+                                break;
+                            }
+                        }
+                        u.vx = std::cos(angle) * BASE_CITIZEN_SPEED;
+                        u.vy = std::sin(angle) * BASE_CITIZEN_SPEED;
+                        u.stateTimerSec = 2.5F;
+                    }
                 }
             }
         }
@@ -276,17 +291,22 @@ void GameWorld::updateCitizenSchedule(Unit &u, std::vector<BuildingObject> &buil
             || u.state == UnitState::Walking) {
             int bId = findNearestAvailableBuilding(u.x, u.y, shouldBeAtWork);
             if (bId != -1) {
-                buildings[bId].reservedOccupants++; // Бронь места!
-                u.targetBuildingId = bId;
-                u.state = shouldBeAtWork ? UnitState::GoingToWork : UnitState::GoingHome;
-                u.waypoints = buildPathBetween(u.x, u.y, buildings[bId].cx, buildings[bId].cy);
-                return;
-            } else { // Не нашёл здания, гуляет
-                u.waypoints.clear();
-                u.state = UnitState::Walking;
-                u.stateTimerSec = 5.0F + rng->bounded(21);
-                return;
+                auto path = buildPathBetween(u.x, u.y, buildings[bId].cx, buildings[bId].cy);
+                if (!path.empty()) {
+                    buildings[bId].reservedOccupants++; // Бронь места!
+                    u.targetBuildingId = bId;
+                    u.state = shouldBeAtWork ? UnitState::GoingToWork : UnitState::GoingHome;
+                    u.waypoints = std::move(path);
+                    return;
+                }
             }
+
+            // Не нашёл доступного здания (или оно за стеной) — гуляет внутри своего сектора
+            u.targetBuildingId = -1;
+            u.waypoints.clear();
+            u.state = UnitState::Walking;
+            u.stateTimerSec = 5.0F + rng->bounded(21);
+            return;
         }
 
         // НУЖНО ВЫЙТИ НА ПРОГУЛКУ

@@ -40,6 +40,8 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     QSGNode *rootNode = oldNode;
     QSGSimpleTextureNode *bgNode = nullptr;
     QSGGeometryNode *buildingsNode = nullptr;
+    QSGGeometryNode *wallsNode = nullptr;
+    QSGGeometryNode *wallsCapsNode = nullptr;
     QSGGeometryNode *pathNode = nullptr;
     QSGGeometryNode *unitsNode = nullptr;
     QSGGeometryNode *overlaysNode = nullptr;
@@ -62,7 +64,25 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         buildingsNode->setMaterial(new QSGVertexColorMaterial());
         rootNode->appendChildNode(buildingsNode);
 
-        // Узел 2: Маршрут выбранного юнита
+        // Узел 2: Карантинные стены (тело)
+        wallsNode = new QSGGeometryNode();
+        auto *wGeom = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0);
+        wGeom->setDrawingMode(QSGGeometry::DrawTriangles);
+        wallsNode->setGeometry(wGeom);
+        wallsNode->setFlags(QSGNode::OwnsGeometry | QSGNode::OwnsMaterial);
+        wallsNode->setMaterial(new QSGVertexColorMaterial());
+        rootNode->appendChildNode(wallsNode);
+
+        // Узел 3: Закруглённые торцы карантинных стен
+        wallsCapsNode = new QSGGeometryNode();
+        auto *wcGeom = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0);
+        wcGeom->setDrawingMode(QSGGeometry::DrawTriangles);
+        wallsCapsNode->setGeometry(wcGeom);
+        wallsCapsNode->setFlags(QSGNode::OwnsGeometry | QSGNode::OwnsMaterial);
+        wallsCapsNode->setMaterial(new QSGVertexColorMaterial());
+        rootNode->appendChildNode(wallsCapsNode);
+
+        // Узел 4: Маршрут выбранного юнита
         pathNode = new QSGGeometryNode();
         auto *pGeom = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0);
         pGeom->setDrawingMode(QSGGeometry::DrawTriangles);
@@ -71,7 +91,7 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         pathNode->setMaterial(new QSGVertexColorMaterial());
         rootNode->appendChildNode(pathNode);
 
-        // Узел 3: Юниты
+        // Узел 5: Юниты
         unitsNode = new QSGGeometryNode();
         auto *uGeom = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0);
         uGeom->setDrawingMode(QSGGeometry::DrawTriangles);
@@ -80,7 +100,7 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         unitsNode->setMaterial(new QSGVertexColorMaterial());
         rootNode->appendChildNode(unitsNode);
 
-        // Узел 4: Оверлеи
+        // Узел 6: Оверлеи
         overlaysNode = new QSGGeometryNode();
         auto *oGeom = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0);
         oGeom->setDrawingMode(QSGGeometry::DrawTriangles);
@@ -89,7 +109,7 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         overlaysNode->setMaterial(new QSGVertexColorMaterial());
         rootNode->appendChildNode(overlaysNode);
 
-        // Узел 5: Партиклы
+        // Узел 7: Партиклы
         effectsNode = new QSGGeometryNode();
         auto *eGeom = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(), 0);
         eGeom->setDrawingMode(QSGGeometry::DrawTriangles);
@@ -100,10 +120,12 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     } else {
         bgNode = static_cast<QSGSimpleTextureNode *>(rootNode->childAtIndex(0));
         buildingsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(1));
-        pathNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(2));
-        unitsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(3));
-        overlaysNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(4));
-        effectsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(5));
+        wallsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(2));
+        wallsCapsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(3));
+        pathNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(4));
+        unitsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(5));
+        overlaysNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(6));
+        effectsNode = static_cast<QSGGeometryNode *>(rootNode->childAtIndex(7));
     }
 
     if (g_mapDirty) {
@@ -114,6 +136,13 @@ QSGNode *Renderer::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         }
         fillGeometry(buildingsNode->geometry(), g_world->buildingsGeometry());
         buildingsNode->markDirty(QSGNode::DirtyGeometry);
+
+        fillGeometry(wallsNode->geometry(), g_world->wallsGeometry());
+        wallsNode->markDirty(QSGNode::DirtyGeometry);
+
+        fillCircleGeometry(wallsCapsNode->geometry(), g_world->wallsCapsGeometry(), 16);
+        wallsCapsNode->markDirty(QSGNode::DirtyGeometry);
+
         g_mapDirty = false;
     }
 

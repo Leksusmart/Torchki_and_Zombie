@@ -10,7 +10,8 @@ Rectangle {
 
     property var world: null
     property int maxSlots: 10
-    property var selectedIds: [1, 2, 3]
+    property var selectedIds: [1, 2, 3, 4]
+
 
     // Блокируем клики и скролл карты под меню
     MouseArea {
@@ -35,7 +36,7 @@ Rectangle {
         {
             name: "ОБОРОНА",
             items: [
-                { id: 101, title: "Карантинная стена", cost: "25 ₽+", accent: "#e53e3e", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
+                { id: 4, title: "Карантинная стена", desc: "Перекрывает улицу", cost: "25 ₽+", accent: "#fc8181" },
                 { id: 102, title: "Блокпост", cost: "120 ₽+", accent: "#38b2ac", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
                 { id: 103, title: "Укрепление", cost: "250 ₽", accent: "#ecc94b", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
                 { id: 104, title: "Снайперское гнездо", cost: "450 ₽", accent: "#fc8181", locked: true, lockText: "ЗАБЛОКИРОВАНО" },

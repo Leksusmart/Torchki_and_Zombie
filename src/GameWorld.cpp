@@ -11,6 +11,7 @@
 #include "GameWorld.h"
 #include "Helicopter.h"
 #include "Navigation.h"
+#include "Walls.h"
 
 #include <QDebug>
 #include <QElapsedTimer>
@@ -60,6 +61,8 @@ void GameWorld::startLevel(const LevelConfig &config)
     g_nextUnitId = 1;
     g_paused = true;
     g_helicopters.clear();
+    g_walls.clear();
+    g_selectedWallId = -1;
 
     // 3. Карта и граф
     g_generator.generateFromLevel(g_currentLevel);
@@ -68,6 +71,9 @@ void GameWorld::startLevel(const LevelConfig &config)
     buildRoadGraphCache();
     buildBuildingsGeometry();
     rebuildBurningLights();
+    rasterizeAllWallsToGrid();
+    rebuildWallsGeometry();
+    rebuildWallOverlays();
 
     // Заполнение пространственных сетоу
     g_unitGridCols = (g_generator.width() + UNIT_GRID_CELL - 1) / UNIT_GRID_CELL;
@@ -705,6 +711,7 @@ void GameWorld::tick()
     updateEffects(dt);
     updateHelicopters(dt);
     updateEvacuations(dt);
+    updateWalls(dt);
 
     // --- ЗАМЕР 5: Пересборка геометрии рендера и оверлеев ---
     profEffectsAndHeliNs += stepTimer.nsecsElapsed();
@@ -1140,7 +1147,7 @@ void GameWorld::updateZombieBehavior(Unit &u,
     int zCellX = std::clamp(static_cast<int>(u.x) / UNIT_GRID_CELL, 0, g_unitGridCols - 1);
     int zCellY = std::clamp(static_cast<int>(u.y) / UNIT_GRID_CELL, 0, g_unitGridRows - 1);
 
-    // Поиск ближайшей видимой жертвы через пространственную сетку 3x3
+    // Поиск ближайшей видимой жертвы (зомби видят людей за карантинными стенами, но не сквозь дома)
     for (int dy = -1; dy <= 1; ++dy) {
         int ny = zCellY + dy;
         if (ny < 0 || ny >= g_unitGridRows)
@@ -1168,7 +1175,7 @@ void GameWorld::updateZombieBehavior(Unit &u,
                 if (dSq >= bestDistSq)
                     continue;
 
-                if (sameBuilding || hasLineOfSight(u.x, u.y, t.x, t.y)) {
+                if (sameBuilding || hasLineOfSightIgnoringQuarantineWalls(u.x, u.y, t.x, t.y)) {
                     bestDistSq = dSq;
                     bestTarget = static_cast<int>(tIdx);
                 }
@@ -1176,7 +1183,57 @@ void GameWorld::updateZombieBehavior(Unit &u,
         }
     }
 
-    // 1. Есть жертва — преследуем / атакуем / заражаем
+    // Вспомогательная лямбда: проверяет, упёрся ли зомби в карантинную стену по текущему вектору (vx, vy)
+    // Возвращает true, если зомби упёрся в стену и нанёс по ней удар (или ждёт кулдауна)
+    auto attackBlockingWallAhead = [&]() -> bool {
+        if (u.insideBuildingId != -1 || g_walls.empty())
+            return false;
+
+        float spd = distanceBetween(u.vx, u.vy);
+        if (spd < 0.1F)
+            return false;
+
+        float dirX = u.vx / spd;
+        float dirY = u.vy / spd;
+        // Проверяем точку в 3.0м перед зомби по направлению движения
+        float probeX = u.x + dirX * 3.0F;
+        float probeY = u.y + dirY * 3.0F;
+
+        for (auto &w : g_walls) {
+            if (w.isConstructing || w.hp <= 0)
+                continue;
+
+            float vx = w.x2 - w.x1;
+            float vy = w.y2 - w.y1;
+            float lenSq = vx * vx + vy * vy;
+            float t = (lenSq > 1e-4F)
+                          ? std::clamp(((probeX - w.x1) * vx + (probeY - w.y1) * vy) / lenSq,
+                                       0.0F,
+                                       1.0F)
+                          : 0.0F;
+            float projX = w.x1 + vx * t;
+            float projY = w.y1 + vy * t;
+
+            float distToCenter = distanceBetween(projX - u.x, projY - u.y);
+            float surfaceDist = std::max(0.0F, distToCenter - w.thickness * 0.5F);
+
+            if (surfaceDist <= 3.5F) {
+                // Зомби целенаправленно упёрся в стену на пути к цели -> атакуем её!
+                u.vx = 0.0F;
+                u.vy = 0.0F;
+                if (u.attackCooldownSec <= 0.0F) {
+                    u.attackCooldownSec = 0.5F;
+                    w.hp = std::max(0, w.hp - 1);
+                    w.underAttackTimerSec = 3.0F;
+                    spawnBurstParticles(projX, projY, 3, 255, 170, 70);
+                }
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // 1. Есть жертва — преследуем напролом (даже сквозь карантинные стены)
     if (bestTarget != -1) {
         float tx = g_units[bestTarget].x;
         float ty = g_units[bestTarget].y;
@@ -1221,15 +1278,18 @@ void GameWorld::updateZombieBehavior(Unit &u,
                     u.hasLastKnownTarget = false;
                 }
             }
+            return;
         } else if (hasWalkableLineOfSight(u.x, u.y, tx, ty)) {
             u.waypoints.clear();
             u.vx = (dx / d) * ZOMBIE_CHASE_SPEED;
             u.vy = (dy / d) * ZOMBIE_CHASE_SPEED;
+            return;
         } else {
+            // Строим путь по дорогам НАПРОЛОМ (ignoreQuarantineWalls = true)
             if (u.waypoints.empty()
                 || distanceBetween(u.waypoints.back().x() - tx, u.waypoints.back().y() - ty)
                        > 25.0f) {
-                u.waypoints = buildPathBetween(QPointF(u.x, u.y), QPointF(tx, ty));
+                u.waypoints = buildPathBetween(QPointF(u.x, u.y), QPointF(tx, ty), true);
                 if (u.waypoints.size() >= 2) {
                     float segLen = static_cast<float>(
                         distanceBetween(u.waypoints[1].x() - u.waypoints[0].x(),
@@ -1253,13 +1313,14 @@ void GameWorld::updateZombieBehavior(Unit &u,
                 } else {
                     u.vx = (wdx / wdist) * ZOMBIE_CHASE_SPEED;
                     u.vy = (wdy / wdist) * ZOMBIE_CHASE_SPEED;
+                    attackBlockingWallAhead(); // Если упёрлись в стену по маршруту — крушим её!
                 }
+                return;
             }
         }
-        return;
     }
 
-    // 2. Waypoints
+    // 2. Waypoints (движение по маршруту к цели / зданию)
     if (!u.waypoints.empty()) {
         QPointF target = u.waypoints.front();
         float dx = static_cast<float>(target.x()) - u.x;
@@ -1270,23 +1331,25 @@ void GameWorld::updateZombieBehavior(Unit &u,
         } else {
             u.vx = (dx / dist) * ZOMBIE_CHASE_SPEED;
             u.vy = (dy / dist) * ZOMBIE_CHASE_SPEED;
+            attackBlockingWallAhead();
         }
         return;
     }
 
-    // 3. Last known target
+    // 3. Last known target (преследование по следу — также упирается и крушит стену на пути)
     if (u.hasLastKnownTarget) {
-        int lkx = std::clamp(static_cast<int>(u.lastKnownTargetPos.x()), 0, g_generator.width() - 1);
-        int lky = std::clamp(static_cast<int>(u.lastKnownTargetPos.y()),
-                             0,
-                             g_generator.height() - 1);
+        float lkxF = static_cast<float>(u.lastKnownTargetPos.x());
+        float lkyF = static_cast<float>(u.lastKnownTargetPos.y());
+        int lkx = std::clamp(static_cast<int>(lkxF), 0, g_generator.width() - 1);
+        int lky = std::clamp(static_cast<int>(lkyF), 0, g_generator.height() - 1);
+
         if (u.insideBuildingId == -1
             && g_generator.walkGrid()[lky * g_generator.width() + lkx] >= 10) {
             u.targetUnitId = -1;
             u.hasLastKnownTarget = false;
         } else {
-            float dx = static_cast<float>(u.lastKnownTargetPos.x()) - u.x;
-            float dy = static_cast<float>(u.lastKnownTargetPos.y()) - u.y;
+            float dx = lkxF - u.x;
+            float dy = lkyF - u.y;
             float d = distanceBetween(dx, dy);
             if (d < 4.0f) {
                 u.targetUnitId = -1;
@@ -1294,6 +1357,7 @@ void GameWorld::updateZombieBehavior(Unit &u,
             } else {
                 u.vx = (dx / d) * ZOMBIE_CHASE_SPEED;
                 u.vy = (dy / d) * ZOMBIE_CHASE_SPEED;
+                attackBlockingWallAhead();
                 return;
             }
         }
@@ -1307,40 +1371,35 @@ void GameWorld::updateZombieBehavior(Unit &u,
         return;
     }
 
-    // 5. На улице — ищем здание с людьми через пространственную сетку 3x3 и ломаем дверь
+    // 5. На улице — ищем здание с людьми (через сетку 3x3) и ломаем дверь (или стену по пути к двери!)
     int bestBldg = -1;
     float bestBldgDistSq = 75.0f * 75.0f;
-
     for (int dy = -1; dy <= 1; ++dy) {
         int ny = zCellY + dy;
         if (ny < 0 || ny >= g_unitGridRows)
             continue;
-
         for (int dx = -1; dx <= 1; ++dx) {
             int nx = zCellX + dx;
             if (nx < 0 || nx >= g_unitGridCols)
                 continue;
-
             for (int bId : g_buildingSpatialGrid[ny * g_unitGridCols + nx]) {
                 const auto &b = buildings[bId];
                 if (b.currentOccupants <= 0 || b.health <= 0 || b.isBurning || b.isBurnedOut)
                     continue;
-
                 QPointF targetPt = !b.pathFromRoad.empty() ? b.doorCenter : QPointF(b.cx, b.cy);
                 float bx = static_cast<float>(targetPt.x());
                 float by = static_cast<float>(targetPt.y());
                 float ddx = bx - u.x;
                 float ddy = by - u.y;
                 float dSq = ddx * ddx + ddy * ddy;
-
-                if (dSq < bestBldgDistSq && hasLineOfSight(u.x, u.y, bx, by)) {
+                if (dSq < bestBldgDistSq
+                    && hasLineOfSightIgnoringQuarantineWalls(u.x, u.y, bx, by)) {
                     bestBldgDistSq = dSq;
                     bestBldg = b.id;
                 }
             }
         }
     }
-
     if (bestBldg != -1) {
         auto &b = buildings[bestBldg];
         QPointF targetPt = !b.pathFromRoad.empty() ? b.doorCenter : QPointF(b.cx, b.cy);
@@ -1349,7 +1408,6 @@ void GameWorld::updateZombieBehavior(Unit &u,
         float dx = bx - u.x;
         float dy = by - u.y;
         float d = std::sqrt(bestBldgDistSq);
-
         if (d <= 5.0f) {
             u.vx = 0.0f;
             u.vy = 0.0f;
@@ -1358,18 +1416,15 @@ void GameWorld::updateZombieBehavior(Unit &u,
                 b.health = std::max(0, b.health - 1);
                 b.underAttackTimerSec = 3.0f;
                 spawnBurstParticles(bx, by, 3, 255, 160, 60);
-
                 if (b.health == 0 && !b.isBurning && !b.isBurnedOut) {
                     b.isBurning = true;
                     b.burnTimerSec = b.area / 15.0f;
                     buildingsVisualDirty = true;
                     rebuildWorkplaceLabels();
-
                     for (auto &occupant : g_units) {
                         if (occupant.insideBuildingId == b.id) {
                             occupant.panicTimerSec = 3.0f;
                             occupant.state = UnitState::Walking;
-
                             occupant.stateTimerSec = 8.0f;
                             occupant.waypoints.clear();
                             for (int pIdx = static_cast<int>(b.pathFromRoad.size()) - 1; pIdx >= 0;
@@ -1382,10 +1437,11 @@ void GameWorld::updateZombieBehavior(Unit &u,
         } else {
             u.vx = (dx / d) * ZOMBIE_CHASE_SPEED;
             u.vy = (dy / d) * ZOMBIE_CHASE_SPEED;
+            attackBlockingWallAhead(); // Если по пути к двери здания стоит карантинная стена — крушим её!
         }
         return;
     }
-    // 6. Бродяжничество
+    // 6. Бродяжничество (без цели стены НЕ атакуем!)
     if (rng->bounded(100) < 4) {
         float angle = static_cast<float>(rng->generateDouble() * 6.28318);
         u.vx = std::cos(angle) * ZOMBIE_WANDER_SPEED;
@@ -1457,7 +1513,7 @@ void GameWorld::stepUnitMovement(Unit &u,
             movedY = true;
         }
     }
-    if (!movedX && !movedY) {
+    if (!movedX && !movedY && u.type != UnitType::Zombie) {
         float escapeAngle = static_cast<float>(rng->generateDouble() * 6.28318);
         float currentSpeed = distanceBetween(u.vx, u.vy);
         if (currentSpeed < 5.0f)
@@ -1466,8 +1522,9 @@ void GameWorld::stepUnitMovement(Unit &u,
         u.vy = std::sin(escapeAngle) * currentSpeed;
     }
 
-    // 5. Анти-застревание для всех
-    if (!u.waypoints.empty()) {
+    // 5. Анти-застревание (не сбрасываем путь зомби, если он целенаправленно крушит стену)
+    bool zombieAssaultingWall = (u.type == UnitType::Zombie && distanceBetween(u.vx, u.vy) < 0.1F);
+    if (!u.waypoints.empty() && !zombieAssaultingWall) {
         u.stuckTimerSec += dt;
         if (u.stuckTimerSec >= 1.2f) {
             float moved = static_cast<float>(

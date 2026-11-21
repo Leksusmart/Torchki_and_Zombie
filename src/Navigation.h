@@ -99,11 +99,17 @@ void GameWorld::buildRoadGraphCache()
 std::vector<QPointF> GameWorld::buildPathBetween(float startPosX,
                                                  float startPosY,
                                                  float endPosX,
-                                                 float endPosY) const
+                                                 float endPosY,
+                                                 bool ignoreQuarantineWalls) const
 {
-    return buildPathBetween(QPointF(startPosX, startPosY), QPointF(endPosX, endPosY));
+    return buildPathBetween(QPointF(startPosX, startPosY),
+                            QPointF(endPosX, endPosY),
+                            ignoreQuarantineWalls);
 }
-std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPos) const
+
+std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos,
+                                                 QPointF endPos,
+                                                 bool ignoreQuarantineWalls) const
 {
     const auto &walkGrid = g_generator.walkGrid();
     const auto &buildings = g_generator.buildings();
@@ -111,7 +117,6 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
     int w = g_generator.width();
     int h = g_generator.height();
 
-    // Вспомогательная лямбда: определяем ID здания по координатам (-1 если на улице)
     auto getBuildingId = [&](QPointF p) -> int {
         int gx = static_cast<int>(p.x());
         int gy = static_cast<int>(p.y());
@@ -124,7 +129,6 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
     int startBId = getBuildingId(startPos);
     int endBId = getBuildingId(endPos);
 
-    // СЛУЧАЙ 1: Обе точки в одном здании
     if (startBId != -1 && startBId == endBId) {
         if (hasWalkableLineOfSight(static_cast<float>(startPos.x()),
                                    static_cast<float>(startPos.y()),
@@ -141,7 +145,6 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
 
     std::vector<QPointF> fullPath;
 
-    // СЛУЧАЙ 2: Старт внутри здания -> доходим до его двери (узел startBuilding->nearestNodeId)
     const BuildingObject *startBuilding = nullptr;
     if (startBId != -1) {
         for (const auto &b : buildings) {
@@ -162,7 +165,6 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
         }
     }
 
-    // СЛУЧАЙ 3: Финиш внутри здания -> конечный узел графа это дверь целевого здания
     const BuildingObject *endBuilding = nullptr;
     if (endBId != -1) {
         for (const auto &b : buildings) {
@@ -173,7 +175,6 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
         }
     }
 
-    // Определяем стартовый и конечный узлы в едином графе (дороги + переулки)
     float sx = static_cast<float>(startPos.x());
     float sy = static_cast<float>(startPos.y());
     float ex = static_cast<float>(endPos.x());
@@ -186,7 +187,6 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
     int endNode = (endBuilding && endBuilding->nearestNodeId != -1) ? endBuilding->nearestNodeId
                                                                     : findNearestRoadNode(ex, ey);
 
-    // Если обе точки на улице и близко по прямой без препятствий — идём напрямую
     if (!startBuilding && !endBuilding && distanceBetween(ex - sx, ey - sy) < 45.0F
         && hasWalkableLineOfSight(sx, sy, ex, ey)) {
         fullPath.push_back(endPos);
@@ -211,7 +211,6 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
         return fullPath;
     }
 
-    // Поиск кратчайшего пути по единому графу (дороги + все колена переулков)
     const int n = static_cast<int>(nodes.size());
     std::vector<float> dist(n, 1e9F);
     std::vector<int> prev(n, -1);
@@ -231,12 +230,25 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
             continue;
 
         for (const auto &[v, weight] : g_roadAdj[u]) {
-            if (dist[u] + weight < dist[v]) {
-                dist[v] = dist[u] + weight;
+            float effectiveWeight = weight;
+            if (weight >= 1e7F) {
+                if (!ignoreQuarantineWalls)
+                    continue; // Люди и солдаты обходят стены
+                // Зомби идут напролом по графу дорог
+                effectiveWeight = static_cast<float>(
+                    distanceBetween(nodes[u].pos.x() - nodes[v].pos.x(),
+                                    nodes[u].pos.y() - nodes[v].pos.y()));
+            }
+            if (dist[u] + effectiveWeight < dist[v]) {
+                dist[v] = dist[u] + effectiveWeight;
                 prev[v] = u;
                 pq.push({dist[v], v});
             }
         }
+    }
+
+    if (dist[endNode] >= 1e7F) {
+        return {};
     }
 
     std::vector<int> nodeChain;
@@ -245,10 +257,8 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
     }
     std::reverse(nodeChain.begin(), nodeChain.end());
 
-    // Если стартовали из здания, узел двери (nodeChain[0]) мы уже добавили в fullPath
     size_t startIdx = (startBuilding && !nodeChain.empty() && nodeChain[0] == startNode) ? 1 : 0;
 
-    // Если стартовали с улицы и уже прошли мимо первого узла вдоль первого ребра — пропускаем его
     if (!startBuilding && nodeChain.size() >= 2) {
         QPointF p0 = nodes[nodeChain[0]].pos;
         QPointF p1 = nodes[nodeChain[1]].pos;
@@ -273,9 +283,7 @@ std::vector<QPointF> GameWorld::buildPathBetween(QPointF startPos, QPointF endPo
         fullPath.push_back(nodes[nodeChain[i]].pos);
     }
 
-    // Финальная точка (центр целевого здания или точка на улице/выходе)
     fullPath.push_back(endPos);
-
     return fullPath;
 }
 
@@ -442,6 +450,8 @@ bool GameWorld::hasLineOfSight(float x1, float y1, float x2, float y2) const
             if (cityMask[idx] == 2 && walkGrid[idx] == 0) {
                 return false;
             }
+            if (!g_wallMask.empty() && g_wallMask[idx] != 0)
+                return false;
         }
 
         if (ix1 == ix2 && iy1 == iy2)
@@ -483,12 +493,57 @@ bool GameWorld::hasWalkableLineOfSight(float x1, float y1, float x2, float y2) c
         if (ix1 < 0 || ix1 >= w || iy1 < 0 || iy1 >= h)
             return false;
 
+        int idx = iy1 * w + ix1;
+        if (!g_wallMask.empty() && g_wallMask[idx] != 0)
+            return false;
+
         if (walkGrid[iy1 * w + ix1] == 0)
             return false;
 
         if (ix1 == ix2 && iy1 == iy2)
             break;
 
+        int e2 = 2 * err;
+        if (e2 > -dy) {
+            err -= dy;
+            ix1 += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            iy1 += sy;
+        }
+    }
+    return true;
+}
+bool GameWorld::hasLineOfSightIgnoringQuarantineWalls(float x1, float y1, float x2, float y2) const
+{
+    const auto &walkGrid = g_generator.walkGrid();
+    const auto &cityMask = g_generator.cityMask();
+    int w = g_generator.width();
+    int h = g_generator.height();
+
+    int ix1 = static_cast<int>(x1);
+    int iy1 = static_cast<int>(y1);
+    int ix2 = static_cast<int>(x2);
+    int iy2 = static_cast<int>(y2);
+
+    int dx = std::abs(ix2 - ix1);
+    int dy = std::abs(iy2 - iy1);
+    int sx = (ix1 < ix2) ? 1 : -1;
+    int sy = (iy1 < iy2) ? 1 : -1;
+    int err = dx - dy;
+
+    while (true) {
+        if (ix1 >= 0 && ix1 < w && iy1 >= 0 && iy1 < h) {
+            int idx = iy1 * w + ix1;
+            // Блокируем только стены зданий (не карантинные стены)
+            if (cityMask[idx] == 2 && walkGrid[idx] == 0) {
+                return false;
+            }
+        }
+
+        if (ix1 == ix2 && iy1 == iy2)
+            break;
         int e2 = 2 * err;
         if (e2 > -dy) {
             err -= dy;
@@ -508,8 +563,10 @@ bool GameWorld::isWalkable(float x, float y) const
     int gy = static_cast<int>(y);
     int w = g_generator.width();
     int h = g_generator.height();
-    if (gx < 0 || gx >= w || gy < 0 || gy >= h)
+    int idx = gy * w + gx;
+    if (!g_wallMask.empty() && g_wallMask[idx] != 0)
         return false;
+
     return g_generator.walkGrid()[gy * w + gx] != 0;
 }
 

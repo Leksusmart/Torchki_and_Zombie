@@ -323,6 +323,173 @@ Window {
                 }
             }
 
+            Rectangle {
+                id: wallCursorCircle
+                visible: gameWorld.selectedTool === 4 && mapMouseArea.containsMouse && !mapMouseArea.isDraggingWall
+                width: 24
+                height: 24
+                radius: 12
+                x: mapMouseArea.hoverX - 12
+                y: mapMouseArea.hoverY - 12
+                color: "#22fc8181"
+                border.color: "#fc8181"
+                border.width: 1.5
+                z: 14
+            }
+
+            // Прямоугольник превью стены во время протягивания мышью
+            Rectangle {
+                id: wallDragPreview
+                visible: gameWorld.selectedTool === 4 && mapMouseArea.isDraggingWall
+                property var info: ({ valid: false, cx: 0, cy: 0, length: 10, angleDeg: 0, cost: 25, hp: 100, buildTime: 1.0 })
+
+                width: info.length || 10
+                height: 9
+                radius: 2.2
+                x: (info.cx || 0) - width * 0.5
+                y: (info.cy || 0) - height * 0.5
+                rotation: info.angleDeg || 0
+                color: info.valid ? "#55e53e3e" : "#44718096"
+                border.color: info.valid ? "#fc8181" : "#a0aec0"
+                border.width: 1.5
+                z: 14
+            }
+
+            // Подпись цены, количества секций, прочности и времени строительства над превью стены
+                        Text {
+                            visible: wallDragPreview.visible
+                            text: {
+                                var inf = wallDragPreview.info
+                                var cnt = inf.sectionCount || 0
+                                if (cnt === 0)
+                                    return "Нет места для секций стены"
+                                var hpStr = (cnt > 1 && inf.minHp !== inf.maxHp)
+                                            ? (inf.minHp + "-" + inf.maxHp + " HP")
+                                            : (inf.maxHp + " HP")
+                                var secWord = (cnt === 1) ? "1 секция" : (cnt + " секц.")
+                                return (inf.cost || 0) + " ₽   •   " + secWord + ", " + hpStr
+                                       + "   •   " + Number(inf.buildTime || 1.0).toFixed(1) + "с"
+                            }
+                            color: wallDragPreview.info.valid ? "#fc8181" : "#cbd5e0"
+                            font.pixelSize: 10
+                            font.bold: true
+                            style: Text.Outline
+                            styleColor: "#0f141d"
+                            transformOrigin: Item.Bottom
+                            scale: Math.min(2.0, Math.max(0.6, 0.9 / cameraContainer.scale))
+                            x: (wallDragPreview.info.cx || 0) - width * 0.5
+                            y: (wallDragPreview.info.cy || 0) - 22 - height
+                            z: 15
+                        }
+
+            // Прогресс-бары строительства и демонтажа стен (референсы №6 и №9)
+            Repeater {
+                model: gameWorld.wallProgressBars
+                delegate: Item {
+                    x: modelData.cx
+                    y: modelData.cy
+                    z: 13
+
+                    Text {
+                        text: (modelData.isConstructing ? "СТРОИТЕЛЬСТВО  " : "ДЕМОНТАЖ  ")
+                              + modelData.timeLeft + "с"
+                        color: modelData.isConstructing ? "#fc8181" : "#f7fafc"
+                        font.pixelSize: 9
+                        font.bold: true
+                        style: Text.Outline
+                        styleColor: "#0f141d"
+                        transformOrigin: Item.Bottom
+                        scale: Math.min(2.0, Math.max(0.6, 0.85 / cameraContainer.scale))
+                        x: -width * 0.5
+                        y: -14 - height
+                    }
+
+                    Rectangle {
+                        width: 48
+                        height: 4.5
+                        x: -24
+                        y: 10
+                        color: "#ee141923"
+                        border.color: "#2d3748"
+                        border.width: 0.5
+
+                        Rectangle {
+                            width: Math.max(1, (parent.width - 1) * Math.min(1, Math.max(0, modelData.progress)))
+                            height: parent.height - 1
+                            x: 0.5
+                            y: 0.5
+                            color: modelData.isConstructing ? "#fc8181" : "#e2e8f0"
+                        }
+                    }
+                }
+            }
+
+            // Карточка выбранной карантинной стены с кнопкой сноса (референс №8)
+            Rectangle {
+                id: wallInfoOverlay
+                visible: gameWorld.selectedWallInfo.valid === true
+                width: 196
+                height: 76
+                color: "#f2111620"
+                border.color: "#fc8181"
+                border.width: 1
+                radius: 2
+                z: 15
+
+                transformOrigin: Item.TopLeft
+                scale: Math.min(2.0, Math.max(0.6, 0.9 / cameraContainer.scale))
+
+                x: (gameWorld.selectedWallInfo.cx || 0) + 12
+                y: (gameWorld.selectedWallInfo.cy || 0) - 10
+
+                Column {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 5
+
+                    Text {
+                        text: "КАРАНТИННАЯ СТЕНА #" + (gameWorld.selectedWallInfo.id || 0)
+                        color: "#f7fafc"
+                        font.pixelSize: 10
+                        font.bold: true
+                        font.letterSpacing: 0.5
+                    }
+
+                    Text {
+                        text: "Прочность: " + (gameWorld.selectedWallInfo.hp || 0)
+                              + " / " + (gameWorld.selectedWallInfo.maxHp || 0)
+                        color: "#a0aec0"
+                        font.pixelSize: 9
+                    }
+
+                    Rectangle {
+                        width: parent.width
+                        height: 24
+                        color: teardownBtnArea.containsMouse ? "#4a1d24" : "#26161c"
+                        border.color: gameWorld.budget >= 200 ? "#fc8181" : "#4a5568"
+                        border.width: 1
+                        radius: 2
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "СНЕСТИ   200 ₽   (10с)"
+                            color: gameWorld.budget >= 200 ? "#fc8181" : "#718096"
+                            font.pixelSize: 10
+                            font.bold: true
+                        }
+
+                        MouseArea {
+                            id: teardownBtnArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                gameWorld.startWallTeardown(gameWorld.selectedWallInfo.id)
+                            }
+                        }
+                    }
+                }
+            }
 
             // Прицел радиуса 250м с автопривязкой (20м) при выборе инструмента Эвакуации
             Rectangle {
@@ -412,14 +579,12 @@ Window {
                     x: modelData.x
                     y: modelData.y
                     z: 12
-
                     // Тень вертолёта со смещением
                     Item {
                         x: 14
                         y: 16
                         rotation: modelData.angleDeg
                         opacity: 0.32
-
                         Rectangle {
                             width: 26; height: 11; radius: 5
                             x: -11; y: -5.5
@@ -438,11 +603,9 @@ Window {
                             Rectangle { width: 2.5; height: 42; x: -1.25; y: -21; color: "#000000" }
                         }
                     }
-
                     // Корпус вертолёта
                     Item {
                         rotation: modelData.angleDeg
-
                         // Хвостовая балка и стабилизатор
                         Rectangle {
                             width: 14; height: 3.5
@@ -456,7 +619,6 @@ Window {
                             x: -24; y: -5
                             color: "#5f6f52"
                         }
-
                         // Основной фюзеляж
                         Rectangle {
                             width: 26; height: 11; radius: 5.5
@@ -465,14 +627,12 @@ Window {
                             border.color: "#2d3748"
                             border.width: 1
                         }
-
                         // Кабина пилота (стекло спереди)
                         Rectangle {
                             width: 8; height: 8; radius: 4
                             x: 5; y: -4
                             color: "#90cdf4"
                         }
-
                         // Полупрозрачный диск от вращения винта + 4 лопасти
                         Rectangle {
                             width: 44; height: 44; radius: 22
@@ -480,11 +640,9 @@ Window {
                             color: "#18ffffff"
                             border.color: "#33ffffff"
                             border.width: 0.8
-
                             Item {
                                 anchors.centerIn: parent
                                 rotation: modelData.rotorDeg
-
                                 Rectangle { width: 42; height: 2.5; x: -21; y: -1.25; color: "#2d3748" }
                                 Rectangle { width: 2.5; height: 42; x: -1.25; y: -21; color: "#2d3748" }
                                 Rectangle { width: 4; height: 4; radius: 2; x: -2; y: -2; color: "#1a202c" }
@@ -493,159 +651,188 @@ Window {
                     }
                 }
             }
-
-
             MouseArea {
                 id: mapMouseArea
                 anchors.fill: parent
                 hoverEnabled: true
                 acceptedButtons: Qt.LeftButton
                 property bool snappedEvac: false
-
+                property bool isDraggingWall: false
+                property real dragStartX: 0
+                property real dragStartY: 0
+                property real hoverX: 0
+                property real hoverY: 0
+                onPressed: (mouse) => {
+                               if (gameWorld.selectedTool === 4) {
+                                   isDraggingWall = true
+                                   dragStartX = mouse.x
+                                   dragStartY = mouse.y
+                                   wallDragPreview.info = gameWorld.previewWall(dragStartX, dragStartY, mouse.x, mouse.y)
+                               }
+                           }
                 onPositionChanged: (mouse) => {
+                                       hoverX = mouse.x
+                                       hoverY = mouse.y
                                        if (gameWorld.selectedTool === 3) {
                                            let snap = gameWorld.snapEvacPoint(mouse.x, mouse.y, 20.0)
                                            snappedEvac = snap.snapped
                                            evacPreviewCircle.x = snap.x - 250
                                            evacPreviewCircle.y = snap.y - 250
+                                       } else if (gameWorld.selectedTool === 4 && isDraggingWall) {
+                                           wallDragPreview.info = gameWorld.previewWall(dragStartX, dragStartY, mouse.x, mouse.y)
                                        }
                                    }
-
+                onReleased: (mouse) => {
+                                if (gameWorld.selectedTool === 4 && isDraggingWall) {
+                                    gameWorld.placeWall(dragStartX, dragStartY, mouse.x, mouse.y)
+                                    isDraggingWall = false
+                                }
+                            }
+                onCanceled: {
+                    isDraggingWall = false
+                }
                 onClicked: (mouse) => {
+                               if (gameWorld.selectedTool === 4) {
+                                   return
+                               }
                                if (gameWorld.selectedTool === 0) {
                                    let hitUnit = gameWorld.selectUnitAt(mouse.x, mouse.y, 7.0)
                                    if (hitUnit) {
-                                       gameWorld.selectBuildingAt(-1000, -1000) // Скрываем оверлей здания
+                                       gameWorld.selectBuildingAt(-1000, -1000)
+                                       gameWorld.selectWallAt(-1000, -1000)
                                    } else {
-                                       gameWorld.selectBuildingAt(mouse.x, mouse.y)
+                                       let hitWall = gameWorld.selectWallAt(mouse.x, mouse.y)
+                                       if (hitWall) {
+                                           gameWorld.selectBuildingAt(-1000, -1000)
+                                       } else {
+                                           gameWorld.selectBuildingAt(mouse.x, mouse.y)
+                                       }
                                    }
                                } else {
+                                   gameWorld.selectWallAt(-1000, -1000)
                                    gameWorld.useToolAt(mouse.x, mouse.y)
                                }
                            }
-
-
-            }
-
-        }
-
-        // Слой ночного затемнения с вырезанием круглых зон освещения (70м) вокруг пожаров
-        Canvas {
-            id: nightOverlay
-            anchors.fill: parent
-            enabled: false
-            visible: gameWorld.nightDarkness > 0.001
-
-            property real darkness: gameWorld.nightDarkness
-            property var lights: gameWorld.burningLights
-            property real camX: cameraContainer.x
-            property real camY: cameraContainer.y
-            property real camScale: cameraContainer.scale
-
-            onDarknessChanged: requestPaint()
-            onLightsChanged: requestPaint()
-            onCamXChanged: requestPaint()
-            onCamYChanged: requestPaint()
-            onCamScaleChanged: requestPaint()
-
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.reset()
-                if (darkness <= 0.001) return
-
-                // Заливаем весь экран ночной темнотой
-                ctx.globalCompositeOperation = "source-over"
-                ctx.fillStyle = Qt.rgba(0.024, 0.043, 0.098, darkness)
-                ctx.fillRect(0, 0, width, height)
-
-                // Вырезаем круглые зоны света (70м) вокруг горящих зданий
-                if (lights && lights.length > 0) {
-                    ctx.globalCompositeOperation = "destination-out"
-                    for (var i = 0; i < lights.length; ++i) {
-                        var sx = camX + lights[i].cx * camScale
-                        var sy = camY + lights[i].cy * camScale
-                        var sr = lights[i].radius * camScale
-
-                        var grad = ctx.createRadialGradient(sx, sy, sr * 0.25, sx, sy, sr)
-                        grad.addColorStop(0.0, "rgba(0, 0, 0, 1.0)") // Внутри светло как днём
-                        grad.addColorStop(0.7, "rgba(0, 0, 0, 0.85)")
-                        grad.addColorStop(1.0, "rgba(0, 0, 0, 0.0)") // Плавный переход в ночь
-
-                        ctx.fillStyle = grad
-                        ctx.beginPath()
-                        ctx.arc(sx, sy, sr, 0, Math.PI * 2)
-                        ctx.fill()
-                    }
-                }
             }
         }
-
-
-        // Перетаскивание карты правой кнопкой мыши
-        DragHandler {
-            target: cameraContainer
-            acceptedButtons: Qt.RightButton
-        }
-
-        // Масштабирование колесиком мыши относительно центра экрана
-        WheelHandler {
-            onWheel: (event) => {
-                         let oldScale = cameraContainer.scale
-                         let factor = event.angleDelta.y > 0 ? 1.15 : 0.85
-                         let newScale = Math.max(0.25, Math.min(5.0, oldScale * factor))
-                         if (newScale === oldScale) return
-
-                         // Координаты центра экрана
-                         let centerX = viewport.width * 0.5
-                         let centerY = viewport.height * 0.5
-
-                         // Вычисляем мировую точку карты, которая сейчас находится ровно в центре экрана
-                         let worldCenterX = (centerX - cameraContainer.x) / oldScale
-                         let worldCenterY = (centerY - cameraContainer.y) / oldScale
-
-                         // Применяем новый масштаб и возвращаем эту мировую точку в центр экрана
-                         cameraContainer.scale = newScale
-                         cameraContainer.x = centerX - worldCenterX * newScale
-                         cameraContainer.y = centerY - worldCenterY * newScale
-                     }
-        }
-
-        // Масштабирование двумя пальцами (pinch-to-zoom) на сенсорном экране
-        PinchHandler {
-            id: pinchHandler
-            target: null // Управляем масштабом и позицией вручную, чтобы сохранить центрирование как у колёсика мыши
-            minimumScale: 0.10
-            maximumScale: 5.0
-
-            property real startScale: 1.0
-
-            onActiveChanged: {
-                if (active) {
-                    startScale = cameraContainer.scale
-                }
-            }
-
-            onScaleChanged: (delta) => {
-                                let oldScale = cameraContainer.scale
-                                let newScale = Math.max(0.25, Math.min(5.0, startScale * activeScale))
-                                if (newScale === oldScale) return
-
-                                // Точка между двумя пальцами в координатах viewport
-                                let pivotX = centroid.position.x
-                                let pivotY = centroid.position.y
-
-                                // Переводим эту точку в мировые координаты карты до изменения масштаба
-                                let worldPivotX = (pivotX - cameraContainer.x) / oldScale
-                                let worldPivotY = (pivotY - cameraContainer.y) / oldScale
-
-                                // Применяем новый масштаб и удерживаем точку под пальцами на месте
-                                cameraContainer.scale = newScale
-                                cameraContainer.x = pivotX - worldPivotX * newScale
-                                cameraContainer.y = pivotY - worldPivotY * newScale
-                            }
-        }
-
     }
+    // Слой ночного затемнения с вырезанием круглых зон освещения (70м) вокруг пожаров
+    Canvas {
+        id: nightOverlay
+        anchors.fill: parent
+        enabled: false
+        visible: gameWorld.nightDarkness > 0.001
+
+        property real darkness: gameWorld.nightDarkness
+        property var lights: gameWorld.burningLights
+        property real camX: cameraContainer.x
+        property real camY: cameraContainer.y
+        property real camScale: cameraContainer.scale
+
+        onDarknessChanged: requestPaint()
+        onLightsChanged: requestPaint()
+        onCamXChanged: requestPaint()
+        onCamYChanged: requestPaint()
+        onCamScaleChanged: requestPaint()
+
+        onPaint: {
+            var ctx = getContext("2d")
+            ctx.reset()
+            if (darkness <= 0.001) return
+
+            // Заливаем весь экран ночной темнотой
+            ctx.globalCompositeOperation = "source-over"
+            ctx.fillStyle = Qt.rgba(0.024, 0.043, 0.098, darkness)
+            ctx.fillRect(0, 0, width, height)
+
+            // Вырезаем круглые зоны света (70м) вокруг горящих зданий
+            if (lights && lights.length > 0) {
+                ctx.globalCompositeOperation = "destination-out"
+                for (var i = 0; i < lights.length; ++i) {
+                    var sx = camX + lights[i].cx * camScale
+                    var sy = camY + lights[i].cy * camScale
+                    var sr = lights[i].radius * camScale
+
+                    var grad = ctx.createRadialGradient(sx, sy, sr * 0.25, sx, sy, sr)
+                    grad.addColorStop(0.0, "rgba(0, 0, 0, 1.0)") // Внутри светло как днём
+                    grad.addColorStop(0.7, "rgba(0, 0, 0, 0.85)")
+                    grad.addColorStop(1.0, "rgba(0, 0, 0, 0.0)") // Плавный переход в ночь
+
+                    ctx.fillStyle = grad
+                    ctx.beginPath()
+                    ctx.arc(sx, sy, sr, 0, Math.PI * 2)
+                    ctx.fill()
+                }
+            }
+        }
+    }
+
+
+    // Перетаскивание карты правой кнопкой мыши
+    DragHandler {
+        target: cameraContainer
+        acceptedButtons: Qt.RightButton
+    }
+
+    // Масштабирование колесиком мыши относительно центра экрана
+    WheelHandler {
+        onWheel: (event) => {
+                     let oldScale = cameraContainer.scale
+                     let factor = event.angleDelta.y > 0 ? 1.15 : 0.85
+                     let newScale = Math.max(0.25, Math.min(5.0, oldScale * factor))
+                     if (newScale === oldScale) return
+
+                     // Координаты центра экрана
+                     let centerX = viewport.width * 0.5
+                     let centerY = viewport.height * 0.5
+
+                     // Вычисляем мировую точку карты, которая сейчас находится ровно в центре экрана
+                     let worldCenterX = (centerX - cameraContainer.x) / oldScale
+                     let worldCenterY = (centerY - cameraContainer.y) / oldScale
+
+                     // Применяем новый масштаб и возвращаем эту мировую точку в центр экрана
+                     cameraContainer.scale = newScale
+                     cameraContainer.x = centerX - worldCenterX * newScale
+                     cameraContainer.y = centerY - worldCenterY * newScale
+                 }
+    }
+
+    // Масштабирование двумя пальцами (pinch-to-zoom) на сенсорном экране
+    PinchHandler {
+        id: pinchHandler
+        target: null // Управляем масштабом и позицией вручную, чтобы сохранить центрирование как у колёсика мыши
+        minimumScale: 0.10
+        maximumScale: 5.0
+
+        property real startScale: 1.0
+
+        onActiveChanged: {
+            if (active) {
+                startScale = cameraContainer.scale
+            }
+        }
+
+        onScaleChanged: (delta) => {
+                            let oldScale = cameraContainer.scale
+                            let newScale = Math.max(0.25, Math.min(5.0, startScale * activeScale))
+                            if (newScale === oldScale) return
+
+                            // Точка между двумя пальцами в координатах viewport
+                            let pivotX = centroid.position.x
+                            let pivotY = centroid.position.y
+
+                            // Переводим эту точку в мировые координаты карты до изменения масштаба
+                            let worldPivotX = (pivotX - cameraContainer.x) / oldScale
+                            let worldPivotY = (pivotY - cameraContainer.y) / oldScale
+
+                            // Применяем новый масштаб и удерживаем точку под пальцами на месте
+                            cameraContainer.scale = newScale
+                            cameraContainer.x = pivotX - worldPivotX * newScale
+                            cameraContainer.y = pivotY - worldPivotY * newScale
+                        }
+    }
+
+
 
     // Верхняя панель статистики (HUD)
     Rectangle {
@@ -705,7 +892,7 @@ Window {
                         return status
                     }
                     color: gameWorld.zombiesCount > 0 ? "#fc8181"
-                         : (gameWorld.infectedCount > 0 ? "#f6ad55" : "#9ae6b4")
+                                                      : (gameWorld.infectedCount > 0 ? "#f6ad55" : "#9ae6b4")
                     font.pixelSize: 10
                     font.bold: true
                 }
@@ -1075,10 +1262,10 @@ Window {
             target: gameWorld
             function onOutbreakOccurred(x, y, index) {
                 alertsModel.insert(0, {
-                    text: "ВСПЫШКА ЗАРАЖЕНИЯ #" + index + ": зафиксирован нулевой пациент в секторе ("
-                          + Math.round(x) + ", " + Math.round(y) + ").",
-                    accent: "#fc8181"
-                })
+                                       text: "ВСПЫШКА ЗАРАЖЕНИЯ #" + index + ": зафиксирован нулевой пациент в секторе ("
+                                             + Math.round(x) + ", " + Math.round(y) + ").",
+                                       accent: "#fc8181"
+                                   })
                 if (alertsModel.count > 6) alertsModel.remove(6)
                 if (!alertsPanel.expanded) alertsPanel.unreadCount++
             }
@@ -1087,8 +1274,8 @@ Window {
                 alertsPanel.lastIsNight = gameWorld.isNight
 
                 var msg = gameWorld.isNight
-                    ? "Наступила ночь. Видимость снижена, следите за очагами пожаров."
-                    : "Наступил день " + gameWorld.dayNumber + ". Жители направляются на работу."
+                        ? "Наступила ночь. Видимость снижена, следите за очагами пожаров."
+                        : "Наступил день " + gameWorld.dayNumber + ". Жители направляются на работу."
                 var clr = gameWorld.isNight ? "#63b3ed" : "#ecc94b"
 
                 alertsModel.insert(0, { text: msg, accent: clr })
@@ -1212,6 +1399,28 @@ Window {
     }
 
     // Нижняя панель выбора способностей
+    Rectangle {
+        visible: gameWorld.selectedTool === 4
+        anchors.bottom: parent.bottom
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottomMargin: 102
+        width: hintRow.implicitWidth + 24
+        height: 24
+        color: "#ee0d1117"
+        border.color: "#2d3748"
+        border.width: 1
+        radius: 2
+        z: 20
+
+        Row {
+            id: hintRow
+            anchors.centerIn: parent
+            spacing: 16
+            Text { text: "Карантинная стена"; color: "#fc8181"; font.pixelSize: 10; font.bold: true }
+            Text { text: "Зажмите ЛКМ и протяните вдоль улицы"; color: "#cbd5e0"; font.pixelSize: 10 }
+            Text { text: "ПКМ — отмена выбора"; color: "#8b9bb4"; font.pixelSize: 10 }
+        }
+    }
     Row {
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
@@ -1222,7 +1431,8 @@ Window {
             model: [
                 { id: 1, title: "Вакцинирующая капсула", desc: "Лечит в радиусе", cost: "90 ₽", accent: "#4299e1" },
                 { id: 2, title: "Отряд десанта", desc: "Высадка солдат в точку", cost: "200 ₽", accent: "#48bb78" },
-                { id: 3, title: "Точка эвакуации", desc: "Инициация эвакуации", cost: "75 ₽", accent: "#38b2ac" }
+                { id: 3, title: "Точка эвакуации", desc: "Инициация эвакуации", cost: "75 ₽", accent: "#38b2ac" },
+                { id: 4, title: "Карантинная стена", desc: "Перекрывает улицу", cost: "25 ₽+", accent: "#fc8181" }
             ]
 
             delegate: Rectangle {
@@ -1249,10 +1459,13 @@ Window {
                     onClicked: {
                         gameWorld.selectedTool = (gameWorld.selectedTool === modelData.id) ? 0 : modelData.id
                     }
+
+
                 }
             }
         }
     }
+
     ToolkitMenu {
         id: toolkitMenu
         world: gameWorld

@@ -126,7 +126,7 @@ void GameWorld::updateSoldierBehavior(Unit &u,
     if (updateSoldierEvacuation(u, dt, buildings, activeZombies))
         return;
 
-    // 2. Поиск цели в радиусе выстрела (35м, сквозь тротуары, но не через стены зданий)
+    // 2. Поиск цели в радиусе выстрела (35м, в том числе сквозь карантинные стены)
     int fireTargetIdx = findSoldierFireTarget(u);
     if (fireTargetIdx != -1) {
         const Unit &target = g_units[fireTargetIdx];
@@ -134,14 +134,17 @@ void GameWorld::updateSoldierBehavior(Unit &u,
 
         fireAtTarget(u, static_cast<size_t>(fireTargetIdx));
 
-        // 3. Корректировка боевой дистанции (если в одном здании или путь по земле свободен)
+        // 3. Корректировка боевой дистанции (если путь по земле свободен) или огонь с места из-за баррикады
         bool sameBuilding = (u.insideBuildingId != -1
                              && u.insideBuildingId == target.insideBuildingId);
+        u.waypoints.clear();
         if (sameBuilding || hasWalkableLineOfSight(u.x, u.y, target.x, target.y)) {
-            u.waypoints.clear();
             adjustSoldierCombatPosition(u, target.x, target.y, dist);
-            return;
+        } else {
+            u.vx = 0.0F;
+            u.vy = 0.0F;
         }
+        return;
     }
 
     // 4. Поиск глобальной цели для преследования (сначала зомби, если их нет — инфицированные)
@@ -300,19 +303,15 @@ void GameWorld::applySoldierEvacAvoidance(Unit &u, const std::vector<size_t> &ac
 
 int GameWorld::findSoldierFireTarget(const Unit &u) const
 {
-    // Задачи:
-    // 1. Найти ближайшего видимого зомби в радиусе выстрела (35м)
-    // 2. Проверить видимых инфицированных жителей в радиусе выстрела (35м)
-    // Стрельба разрешена только если оба в одном помещении или оба на улице с прямой видимостью
-
     const float shootRadiusSq = 35.0F * 35.0F;
 
     auto canShootTarget = [&](const Unit &target) -> bool {
         if (u.insideBuildingId != target.insideBuildingId)
-            return false; // Не стреляем сквозь стены между улицей и зданием
+            return false; // Не стреляем между улицей и зданием
         if (u.insideBuildingId != -1)
             return true; // Внутри одной комнаты стенок нет
-        return hasLineOfSight(u.x, u.y, target.x, target.y);
+        // Стреляем поверх/сквозь карантинные стены (и по зомби, и по инфицированным), но не сквозь дома
+        return hasLineOfSightIgnoringQuarantineWalls(u.x, u.y, target.x, target.y);
     };
 
     int bestZombie = -1;
@@ -321,6 +320,7 @@ int GameWorld::findSoldierFireTarget(const Unit &u) const
     int sCellX = std::clamp(static_cast<int>(u.x) / UNIT_GRID_CELL, 0, g_unitGridCols - 1);
     int sCellY = std::clamp(static_cast<int>(u.y) / UNIT_GRID_CELL, 0, g_unitGridRows - 1);
 
+    // 1. Видимые зомби в радиусе 35м (включая находящихся за карантинной стеной)
     for (int dy = -1; dy <= 1; ++dy) {
         int ny = sCellY + dy;
         if (ny < 0 || ny >= g_unitGridRows)
@@ -341,7 +341,7 @@ int GameWorld::findSoldierFireTarget(const Unit &u) const
                 if (dSq >= bestZombieDistSq)
                     continue;
 
-                if (u.insideBuildingId != -1) {
+                if (canShootTarget(z)) {
                     bestZombieDistSq = dSq;
                     bestZombie = static_cast<int>(zIdx);
                 }
@@ -352,7 +352,7 @@ int GameWorld::findSoldierFireTarget(const Unit &u) const
     if (bestZombie != -1)
         return bestZombie;
 
-    // 2. Инфицированные жители в радиусе выстрела (35м)
+    // 2. Инфицированные жители в радиусе 35м (также сквозь карантинные стены)
     int bestInfected = -1;
     float bestInfectedDistSq = shootRadiusSq;
 
@@ -360,13 +360,14 @@ int GameWorld::findSoldierFireTarget(const Unit &u) const
         const Unit &cand = g_units[i];
         if (cand.hp <= 0 || cand.type != UnitType::Citizen || !cand.isInfected)
             continue;
-        if (!canShootTarget(cand))
-            continue;
 
         float dx = cand.x - u.x;
         float dy = cand.y - u.y;
         float dSq = dx * dx + dy * dy;
-        if (dSq < bestInfectedDistSq) {
+        if (dSq >= bestInfectedDistSq)
+            continue;
+
+        if (canShootTarget(cand)) {
             bestInfectedDistSq = dSq;
             bestInfected = static_cast<int>(i);
         }
@@ -400,41 +401,73 @@ void GameWorld::adjustSoldierCombatPosition(Unit &u, float targetX, float target
 
 void GameWorld::routeSoldierToTarget(Unit &u, const Unit &target)
 {
-    // Задачи:
-    // 1. Не перестраивать путь, если цель сместилась меньше чем на 20м от конца текущего маршрута
-    // 2. Построить путь через buildPathBetween (учитывает двери и тропинки зданий)
-    // 3. Отбросить первый узел на улице, если солдат уже продвинулся дальше него
-
     // 1. Проверяем смещение цели относительно конечной точки текущего маршрута
     if (!u.waypoints.empty()) {
         QPointF lastPt = u.waypoints.back();
         float targetShift = distanceBetween(static_cast<float>(lastPt.x()) - target.x,
                                             static_cast<float>(lastPt.y()) - target.y);
         if (targetShift <= 20.0F || u.repathCooldownSec > 0.0F) {
-            if (target.insideBuildingId == -1) {
+            if (target.insideBuildingId == -1
+                && hasWalkableLineOfSight(static_cast<float>(lastPt.x()),
+                                          static_cast<float>(lastPt.y()),
+                                          target.x,
+                                          target.y)) {
                 u.waypoints.back() = QPointF(target.x, target.y);
             }
             return;
         }
     }
 
-    // 2. Строим путь
-    u.repathCooldownSec = 0.35F; // Запрещаем повторный вызов Дейкстры в течение 0.35с
-    std::vector<QPointF> newPath = buildPathBetween(u.x, u.y, target.x, target.y);
+    // 2. Строим прямой маршрут к цели с учётом карантинных стен
+    u.repathCooldownSec = 0.35F;
+    std::vector<QPointF> newPath = buildPathBetween(u.x, u.y, target.x, target.y, false);
 
-    // 3. Если солдат на улице — отбрасываем первый узел, если он позади солдата
+    // 3. Если цель замурована за карантинными стенами (путь пуст) —
+    // ищем ближайшую доступную ноду НА ДОРОГЕ (!isAlleyNode) рядом с целью
+    if (newPath.empty()) {
+        const auto &nodes = g_generator.nodes();
+        float bestScore = 1e9F;
+
+        for (size_t i = 0; i < nodes.size(); ++i) {
+            if (nodes[i].isAlleyNode)
+                continue; // Только узлы основных дорог, не тропинки к домам
+
+            float nx = static_cast<float>(nodes[i].pos.x());
+            float ny = static_cast<float>(nodes[i].pos.y());
+            float dToTarget = distanceBetween(nx - target.x, ny - target.y);
+            if (dToTarget > 90.0F)
+                continue;
+
+            bool canShootFromNode
+                = (dToTarget <= 34.0F
+                   && hasLineOfSightIgnoringQuarantineWalls(nx, ny, target.x, target.y));
+            float score = dToTarget + (canShootFromNode ? 0.0F : 40.0F);
+            if (score < bestScore) {
+                auto candidatePath = buildPathBetween(u.x, u.y, nx, ny, false);
+                if (!candidatePath.empty()) {
+                    bestScore = score;
+                    newPath = std::move(candidatePath);
+                }
+            }
+        }
+    }
+
+    // 4. Если солдат на улице — отбрасываем первый узел, если он позади солдата
     if (u.insideBuildingId == -1 && newPath.size() >= 2) {
-        float segLen = static_cast<float>(
-            distanceBetween(newPath[1].x() - newPath[0].x(), newPath[1].y() - newPath[0].y()));
+        float segLen = static_cast<float>(distanceBetween(newPath.at(1).x() - newPath.at(0).x(),
+                                                          newPath.at(1).y() - newPath.at(0).y()));
         float distToSecond = static_cast<float>(
-            distanceBetween(newPath[1].x() - u.x, newPath[1].y() - u.y));
+            distanceBetween(newPath.at(1).x() - u.x, newPath.at(1).y() - u.y));
         if (distToSecond < segLen
             && hasWalkableLineOfSight(u.x,
                                       u.y,
-                                      static_cast<float>(newPath[1].x()),
-                                      static_cast<float>(newPath[1].y()))) {
+                                      static_cast<float>(newPath.at(1).x()),
+                                      static_cast<float>(newPath.at(1).y()))) {
             newPath.erase(newPath.begin());
         }
+    }
+    if (newPath.empty()) {
+        return;
     }
 
     u.waypoints = std::move(newPath);
@@ -559,25 +592,74 @@ bool GameWorld::followSoldierWaypoints(Unit &u)
 }
 void GameWorld::patrolSoldier(Unit &u, const std::vector<BuildingObject> &buildings)
 {
-    // Задачи:
-    // 1. Выйти из пустого здания, если солдат внутри
-    // 2. Иначе — выбрать случайный узел дороги для патрулирования
-    // 1. Выход из здания
+    // 1. Выход из пустого здания
     if (u.insideBuildingId != -1 && u.insideBuildingId < static_cast<int>(buildings.size())) {
         const auto &b = buildings[u.insideBuildingId];
         for (int p = static_cast<int>(b.pathFromRoad.size()) - 1; p >= 0; --p)
             u.waypoints.push_back(b.pathFromRoad[p]);
         return;
     }
-    // 2. Патруль к случайному перекрёстку
-    const auto &nodes = g_generator.nodes();
-    if (!nodes.empty()) {
-        auto *rng = QRandomGenerator::global();
-        int randNode = rng->bounded(static_cast<int>(nodes.size()));
-        for (int attempt = 0; attempt < 10 && nodes[randNode].isAlleyNode; ++attempt) {
-            randNode = rng->bounded(static_cast<int>(nodes.size()));
-        }
 
-        u.waypoints = buildPathBetween(QPointF(u.x, u.y), nodes[randNode].pos);
+    // 2. Если солдат в крошечном тупике без единой дорожной ноды — держим курс по таймеру
+    if (u.stateTimerSec > 0.0F && distanceBetween(u.vx, u.vy) > 1.0F) {
+        return;
     }
+
+    const auto &nodes = g_generator.nodes();
+    if (nodes.empty())
+        return;
+
+    auto *rng = QRandomGenerator::global();
+
+    // 3. Пробуем 6 случайных дорожных нод (!isAlleyNode)
+    for (int attempt = 0; attempt < 6; ++attempt) {
+        int randNode = rng->bounded(static_cast<int>(nodes.size()));
+        if (nodes[randNode].isAlleyNode)
+            continue;
+        if (distanceBetween(static_cast<float>(nodes[randNode].pos.x()) - u.x,
+                            static_cast<float>(nodes[randNode].pos.y()) - u.y)
+            < 10.0F)
+            continue;
+
+        auto path = buildPathBetween(QPointF(u.x, u.y), nodes[randNode].pos, false);
+        if (!path.empty()) {
+            u.waypoints = std::move(path);
+            return;
+        }
+    }
+
+    // 4. Если сектор изолирован стенами — собираем ВСЕ достижимые ноды дороги внутри этого сектора
+    std::vector<int> reachableRoadNodes;
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        if (nodes[i].isAlleyNode)
+            continue;
+        float d = distanceBetween(static_cast<float>(nodes[i].pos.x()) - u.x,
+                                  static_cast<float>(nodes[i].pos.y()) - u.y);
+        if (d < 8.0F)
+            continue;
+
+        auto path = buildPathBetween(QPointF(u.x, u.y), nodes[i].pos, false);
+        if (!path.empty()) {
+            reachableRoadNodes.push_back(static_cast<int>(i));
+        }
+    }
+
+    if (!reachableRoadNodes.empty()) {
+        int chosen = reachableRoadNodes[rng->bounded(static_cast<int>(reachableRoadNodes.size()))];
+        u.waypoints = buildPathBetween(QPointF(u.x, u.y), nodes[chosen].pos, false);
+        return;
+    }
+
+    // 5. Внутри совсем маленького кармана без дорожных нод — плавно идём вдоль свободного прохода
+    float angle = static_cast<float>(rng->generateDouble() * 6.28318);
+    for (int attempt = 0; attempt < 12; ++attempt) {
+        float testAngle = static_cast<float>(rng->generateDouble() * 6.28318);
+        if (isWalkable(u.x + std::cos(testAngle) * 10.0F, u.y + std::sin(testAngle) * 10.0F)) {
+            angle = testAngle;
+            break;
+        }
+    }
+    u.vx = std::cos(angle) * BASE_CITIZEN_SPEED;
+    u.vy = std::sin(angle) * BASE_CITIZEN_SPEED;
+    u.stateTimerSec = 2.0F;
 }

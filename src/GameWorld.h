@@ -24,12 +24,14 @@ public:
     const QImage &backgroundImage() const { return g_generator.renderedBackground(); }
     const std::vector<RenderQuad> &buildingsGeometry() const { return g_buildingsGeometry; }
     const std::vector<RenderQuad> &unitGeometry() const { return g_unitGeometry; }
+    const std::vector<RenderQuad> &wallsGeometry() const { return g_wallsGeometry; }
     const std::vector<RenderQuad> &buildingOverlaysGeometry() const
     {
         return g_buildingOverlaysGeometry;
     }
     const std::vector<RenderQuad> &effectsGeometry() const { return g_effectsGeometry; }
     const std::vector<RenderQuad> &selectedPathGeometry() const { return g_selectedPathGeometry; }
+    const std::vector<RenderQuad> &wallsCapsGeometry() const { return g_wallsCapsGeometry; }
 
 signals:
     void outbreakOccurred(float x, float y, int outbreakIndex);
@@ -39,6 +41,12 @@ signals:
 private: // функции
     void tick();
     void buildBuildingsGeometry();
+    void updateWalls(float dt);
+    void rebuildWallsGeometry();
+    void rebuildWallOverlays();
+    void rasterizeAllWallsToGrid();
+    bool canPlaceWallSegment(float x1, float y1, float x2, float y2) const;
+    void updateSelectedWallInfo();
     void spawnInitialUnits(int citizenCount);
     void processOutbreaks();
     void triggerSingleOutbreak(int count, int index);
@@ -124,11 +132,15 @@ private: // функции
 
     // Navigation.h
     bool hasLineOfSight(float x1, float y1, float x2, float y2) const;
-    std::vector<QPointF> buildPathBetween(QPointF startPos, QPointF endPos) const;
+    std::vector<QPointF> buildPathBetween(QPointF startPos,
+                                          QPointF endPos,
+                                          bool ignoreQuarantineWalls = false) const;
     std::vector<QPointF> buildPathBetween(float startPosX,
                                           float startPosY,
                                           float endPosX,
-                                          float endPosY) const;
+                                          float endPosY,
+                                          bool ignoreQuarantineWalls = false) const;
+
     int findNearestAvailableBuilding(float x, float y, bool wantWorkplace) const;
     int findNearestRoadNode(float x, float y) const;
     bool isWalkable(float x, float y) const;
@@ -136,6 +148,7 @@ private: // функции
     QPointF findNearestWalkable(float x, float y, float maxRadius = 40.0F) const;
     void buildRoadGraphCache();
     bool hasWalkableLineOfSight(float x1, float y1, float x2, float y2) const;
+    bool hasLineOfSightIgnoringQuarantineWalls(float x1, float y1, float x2, float y2) const;
     float distanceBetween(float x, float y) const { return std::hypot(x, y); };
 
 private: // переменные
@@ -149,6 +162,8 @@ private: // переменные
 
     bool g_paused = false;
 
+    int g_nextWallId = 1;
+    int g_selectedWallId = -1;
     int g_selectedBuildingId = -1;
     int g_lastTrackedHour = -1;
     int g_evacuatedTotalCount = 0;
@@ -183,17 +198,24 @@ private: // переменные
     static constexpr double TAX_PER_WORKER_SEC = 0.005F;
     static constexpr int UNIT_GRID_CELL = 80; // Радиус обзора зомби = 75м
 
+    QVariantList g_wallProgressBarsList;
     QVariantList g_helicoptersList;
     QVariantList g_dropZonesList;
     QVariantList g_activeEvacuationsList;
     QVariantList g_evacPoints;
     QVariantList g_burningLights;
     QVariantList g_workplaceLabels;
-    QVariantList g_equippedTools = {1, 2, 3}; // По умолчанию: Вакцина (1), Десант (2), Эвакуация (3)
+    QVariantList g_equippedTools
+        = {1, 2, 3, 4}; // По умолчанию: Вакцина (1), Десант (2), Эвакуация (3), Стена (4
 
+    QVariantMap g_selectedWallInfo;
     QVariantMap g_selectedUnitInfo;
     QVariantMap g_selectedBuildingInfo;
 
+    std::vector<RenderQuad> g_wallsGeometry;
+    std::vector<RenderQuad> g_wallsCapsGeometry;
+    std::vector<QuarantineWall> g_walls;
+    std::vector<uint8_t> g_wallMask;                      // 1 = клетка перекрыта построенной стеной
     std::vector<std::vector<size_t>> g_targetSpatialGrid; // Сетка целей для зомби (zombieTargets)
     std::vector<std::vector<size_t>> g_zombieSpatialGrid; // Сетка активных зомби (для жителей и солдат)
     std::vector<std::vector<int>>
@@ -222,6 +244,8 @@ private:
     // QML связи
     Q_OBJECT
     QML_ELEMENT
+    Q_PROPERTY(QVariantList wallProgressBars READ wallProgressBars NOTIFY wallsChanged)
+    Q_PROPERTY(QVariantMap selectedWallInfo READ selectedWallInfo NOTIFY selectedWallChanged)
     Q_PROPERTY(QVariantMap selectedUnitInfo READ selectedUnitInfo NOTIFY selectedUnitChanged)
     Q_PROPERTY(QVariantList helicopters READ helicopters NOTIFY helicoptersChanged)
     Q_PROPERTY(QVariantList dropZones READ dropZones NOTIFY helicoptersChanged)
@@ -256,6 +280,8 @@ private:
 
 public:
     // QML свойства
+    /*Q_PROPERTY*/ QVariantList wallProgressBars() const { return g_wallProgressBarsList; }
+    /*Q_PROPERTY*/ QVariantMap selectedWallInfo() const { return g_selectedWallInfo; }
     /*Q_PROPERTY*/ QVariantList helicopters() const { return g_helicoptersList; }
     /*Q_PROPERTY*/ QVariantList dropZones() const { return g_dropZonesList; }
     /*Q_PROPERTY*/ QVariantList equippedTools() const { return g_equippedTools; }
@@ -286,6 +312,10 @@ public:
     /*Q_PROPERTY*/ QVariantMap selectedUnitInfo() const { return g_selectedUnitInfo; }
 
     // QML вызовы
+    Q_INVOKABLE QVariantMap previewWall(float x1, float y1, float x2, float y2) const;
+    Q_INVOKABLE bool placeWall(float x1, float y1, float x2, float y2);
+    Q_INVOKABLE bool selectWallAt(float worldX, float worldY);
+    Q_INVOKABLE bool startWallTeardown(int wallId);
     Q_INVOKABLE bool selectUnitAt(float worldX, float worldY, float radius = 8.0f);
     Q_INVOKABLE void regenerateMap();
     Q_INVOKABLE void togglePause();
@@ -300,6 +330,8 @@ public:
     Q_INVOKABLE void selectBuildingAt(float worldX, float worldY);
 signals:
     // QML свойства изменились
+    /*Q_PROPERTY*/ void wallsChanged();
+    /*Q_PROPERTY*/ void selectedWallChanged();
     /*Q_PROPERTY*/ void selectedUnitChanged();
     /*Q_PROPERTY*/ void helicoptersChanged();
     /*Q_PROPERTY*/ void equippedToolsChanged();

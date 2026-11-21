@@ -97,6 +97,29 @@ struct RoadEdge
     int toId;
 };
 
+struct QuarantineWall
+{
+    int id = 0;
+    float x1 = 0.0F, y1 = 0.0F;
+    float x2 = 0.0F, y2 = 0.0F;
+    float cx = 0.0F, cy = 0.0F;
+    float length = 0.0F;
+    float thickness = 9.0F;
+    float angleRad = 0.0F;
+
+    int hp = 100;
+    int maxHp = 100;
+    float underAttackTimerSec = 0.0F; // Белый контур при атаке (3.0с после удара)
+
+    bool isConstructing = true;
+    float buildTimeLeft = 0.0F;
+    float buildTimeTotal = 1.0F;
+
+    bool isTearingDown = false;
+    float teardownTimeLeft = 0.0F;
+    float teardownTimeTotal = 10.0F;
+};
+
 enum class BuildingType : uint8_t {
     Residential = 0, // Жилой дом (базовый размер 1x)
     Office = 1,      // Офисное здание (размер 1x - 3x)
