@@ -47,6 +47,13 @@ qt_add_qml_module(${PROJECT_NAME}
     QML_FILES
         src/Main.qml
         src/ToolkitMenu.qml
+        src/TopHud.qml
+        src/LegendPanel.qml
+        src/AlertsPanel.qml
+        src/ToolBar.qml
+        src/SelectionOverlays.qml
+        src/WorldOverlays.qml
+        src/NightOverlay.qml
     RESOURCES
         ${LEVEL_ASSETS}
 )

@@ -2,18 +2,17 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 
+// Меню выбора арсенала: категории и инструменты загружаются из C++ ToolRegistry (world.toolCategories)
 Rectangle {
     id: root
     anchors.fill: parent
-    color: "#fa0e1218" // Плотный тёмный фон без просвечивания карты
+    color: "#fa0e1218"
     z: 100
 
-    property var world: null
+    required property var world
     property int maxSlots: 10
     property var selectedIds: [1, 2, 3, 4]
 
-
-    // Блокируем клики и скролл карты под меню
     MouseArea {
         anchors.fill: parent
         hoverEnabled: true
@@ -32,73 +31,12 @@ Rectangle {
         selectedIds = list
     }
 
-    readonly property var categoriesData: [
-        {
-            name: "ОБОРОНА",
-            items: [
-                { id: 4, title: "Карантинная стена", desc: "Перекрывает улицу", cost: "25 ₽+", accent: "#fc8181" },
-                { id: 102, title: "Блокпост", cost: "120 ₽+", accent: "#38b2ac", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 103, title: "Укрепление", cost: "250 ₽", accent: "#ecc94b", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 104, title: "Снайперское гнездо", cost: "450 ₽", accent: "#fc8181", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 105, title: "Минное поле", cost: "550 ₽", accent: "#f6ad55", locked: true, lockText: "ЗАБЛОКИРОВАНО" }
-            ]
-        },
-        {
-            name: "ВОЙСКА",
-            items: [
-                { id: 2, title: "Отряд десанта", cost: "200 ₽", accent: "#4299e1", locked: false, desc: "Высадка 5 солдат на точку" },
-                { id: 201, title: "Чинук", cost: "900 ₽", accent: "#63b3ed", locked: true, lockText: "ЗАБЛОКИРОВАНО", slotsTag: "2 СЛОТА" },
-                { id: 202, title: "Сигнальная ракета", cost: "350 ₽", accent: "#f56565", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 203, title: "Отряд зачистки", cost: "400 ₽", accent: "#a0aec0", locked: true, lockText: "ЗАБЛОКИРОВАНО" }
-            ]
-        },
-        {
-            name: "АТАКИ",
-            items: [
-                { id: 301, title: "Ковровая бомбардировка", cost: "300 ₽", accent: "#ed8936", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 302, title: "Авиаудар", cost: "700 ₽", accent: "#f6ad55", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 303, title: "Напалмовый удар", cost: "800 ₽", accent: "#dd6b20", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 304, title: "Боевой вертолёт", cost: "650 ₽", accent: "#cbd5e0", locked: true, lockText: "ЗАБЛОКИРОВАНО", slotsTag: "2 СЛОТА" },
-                { id: 305, title: "Апач", cost: "850 ₽", accent: "#ecc94b", locked: true, lockText: "ЗАБЛОКИРОВАНО", slotsTag: "2 СЛОТА" },
-                { id: 306, title: "Миномётный обстрел", cost: "900 ₽", accent: "#fc8181", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 307, title: "Звуковая приманка", cost: "300 ₽", accent: "#b794f4", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 308, title: "Дымовая завеса", cost: "450 ₽", accent: "#a0aec0", locked: true, lockText: "ЗАБЛОКИРОВАНО" }
-            ]
-        },
-        {
-            name: "МЕДИЦИНА И РАЗВЕДКА",
-            items: [
-                { id: 401, title: "Разведдрон", cost: "40 ₽", accent: "#38b2ac", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 402, title: "Вышка разведки", cost: "250 ₽", accent: "#4fd1c5", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 1, title: "Вакцинирующая капсула", cost: "90 ₽", accent: "#4299e1", locked: false, desc: "Лечит и вакцинирует в радиусе 45м" },
-                { id: 403, title: "Палатка вакцинации", cost: "600 ₽", accent: "#63b3ed", locked: true, lockText: "ЗАБЛОКИРОВАНО" }
-            ]
-        },
-        {
-            name: "ЭКОНОМИКА",
-            items: [
-                { id: 501, title: "Склад припасов", cost: "250 ₽", accent: "#ecc94b", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 502, title: "Продовольственный склад", cost: "400 ₽", accent: "#d69e2e", locked: true, lockText: "ЗАБЛОКИРОВАНО" }
-            ]
-        },
-        {
-            name: "ЭВАКУАЦИЯ",
-            items: [
-                { id: 3, title: "Точка эвакуации", cost: "75 ₽", accent: "#48bb78", locked: false, desc: "Инициация эвакуации на выходе" },
-                { id: 601, title: "Эвакуация с крыши", cost: "150 ₽", accent: "#38b2ac", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 602, title: "Полевое убежище", cost: "500 ₽", accent: "#68d391", locked: true, lockText: "ЗАБЛОКИРОВАНО" },
-                { id: 603, title: "Зона эвакуации", cost: "ВСЕГДА", accent: "#ecc94b", locked: true, lockText: "ЗАБЛОКИРОВАНО" }
-            ]
-        }
-    ]
-
     ColumnLayout {
         anchors.centerIn: parent
         width: Math.min(parent.width - 48, 760)
         height: parent.height - 32
         spacing: 12
 
-        // 1. Шапка меню
         ColumnLayout {
             Layout.fillWidth: true
             spacing: 4
@@ -111,11 +49,7 @@ Rectangle {
                     font.pixelSize: 18
                     font.bold: true
                 }
-                Text {
-                    text: "•"
-                    color: "#718096"
-                    font.pixelSize: 18
-                }
+                Text { text: "•"; color: "#718096"; font.pixelSize: 18 }
                 Text {
                     text: root.selectedIds.length + " / " + root.maxSlots
                     color: "#ecc94b"
@@ -132,7 +66,6 @@ Rectangle {
             }
         }
 
-        // 2. Список категорий через Flickable (гарантирует правильную ширину карточек)
         Flickable {
             id: flickArea
             Layout.fillWidth: true
@@ -153,7 +86,7 @@ Rectangle {
                 spacing: 16
 
                 Repeater {
-                    model: root.categoriesData
+                    model: root.world.toolCategories
                     delegate: ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 6
@@ -187,7 +120,6 @@ Rectangle {
                                     border.width: isSelected ? 2 : 1
                                     radius: 3
 
-                                    // Левая цветная полоска-акцент
                                     Rectangle {
                                         visible: !card.isLocked
                                         width: 4
@@ -261,7 +193,7 @@ Rectangle {
                 }
             }
         }
-        // 3. Нижняя кнопка "Применить"
+
         Rectangle {
             id: applyBtn
             Layout.fillWidth: true
@@ -285,9 +217,8 @@ Rectangle {
                 onClicked: {
                     if (root.world) {
                         root.world.equippedTools = root.selectedIds
-                        if (root.world.paused) {
+                        if (root.world.paused)
                             root.world.togglePause()
-                        }
                     }
                     root.visible = false
                 }

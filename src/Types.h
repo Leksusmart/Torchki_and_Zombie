@@ -2,7 +2,9 @@
 #include <QPointF>
 #include <QStringList>
 #include <cstdint>
+#include <vector>
 
+/// Визуальная частица эффекта (трассер пули, искра или ударная волна).
 struct EffectParticle
 {
     float x, y;
@@ -12,10 +14,11 @@ struct EffectParticle
     float lifeSec;
     float maxLifeSec;
     uint8_t r, g, b, a;
-    bool isLine = false; // true для трассеров пуль
-    float x2 = 0.0f, y2 = 0.0f;
+    bool isLine = false; ///< true для трассеров пуль (отрезок от (x, y) до (x2, y2))
+    float x2 = 0.0F, y2 = 0.0F;
 };
 
+/// Прямоугольник или круг для пакетной отправки в вершинный буфер Renderer.
 struct RenderQuad
 {
     float cx, cy;
@@ -24,35 +27,36 @@ struct RenderQuad
     uint8_t r, g, b, a;
 };
 
+/// Роль юнита в симуляции.
 enum class UnitType : uint8_t { Citizen = 0, Vaccinated = 1, Zombie = 2, Soldier = 3 };
 
-// В enum class UnitState:
+/// Текущее состояние конечного автомата жителя.
 enum class UnitState : uint8_t {
     GoingToWork = 0,
     Working = 1,
     GoingHome = 2,
     AtHome = 3,
-    Walking = 4,        // Бездельничает
-    Evacuating = 5,     // Спокойно бежит к точке эвакуации
-    PanicEvacuating = 6 // Паникует И одновременно прорывается к точке эвакуации
+    Walking = 4,        ///< Свободная прогулка по городу
+    Evacuating = 5,     ///< Спокойный бег к точке эвакуации
+    PanicEvacuating = 6 ///< Паника с уклонением от зомби по пути к эвакуации
 };
 
-// Активная операция эвакуации на конкретном выходе
+/// Активная операция эвакуации на конкретном выходе карты.
 struct ActiveEvacuation
 {
     int evacNodeId = -1;
     QPointF evacPos;
-    float timeLeftSec = 30.0f;
+    float timeLeftSec = 30.0F;
     int boardedCount = 0;
-    bool completed = false; // true когда набрано 50 чел или вышли 30 сек
+    bool completed = false; ///< true при заполнении конвоя или истечении таймера
 
-    // Параметры конвоя на воде/мосту
     QPointF convoyStart;
     QPointF convoyEnd;
     QPointF convoyPos;
-    std::vector<QPointF> passengerOffsets; // Локальные координаты людей в круге 15м
+    std::vector<QPointF> passengerOffsets; ///< Смещения пассажиров внутри круга/овала конвоя
 };
 
+/// Состояние десантного вертолёта (подлёт -> зависание -> отлёт).
 struct DropHelicopter
 {
     enum class Phase : uint8_t { Approaching = 0, Hovering = 1, Departing = 2 };
@@ -69,34 +73,40 @@ struct DropHelicopter
     Phase phase = Phase::Approaching;
 };
 
+/// Запланированная вспышка заражения на уровне.
 struct OutbreakEvent
 {
-    float triggerTimeSec = 2.0f;
+    float triggerTimeSec = 2.0F;
     int initialInfected = 1;
     bool triggered = false;
 };
+
+/// Маршрут движения эвакуационного конвоя и уходящих десантников.
 struct EvacRoute
 {
-    int group; // 1 или 2
+    int group; ///< Группа маршрута (1 или 2)
     QPointF startPos;
     QPointF endPos;
 };
 
+/// Узел дорожного графа (перекрёсток, точка эвакуации или изгиб тропинки).
 struct RoadNode
 {
     int id;
     QPointF pos;
     bool isEvacExit = false;
-    bool isAlleyNode = false; // true для узлов переулков и тропинок к зданиям
-    QString evacName;         // Название выхода
+    bool isAlleyNode = false; ///< true для узлов переулков и тропинок к зданиям
+    QString evacName;
 };
 
+/// Ребро дорожного графа между двумя узлами.
 struct RoadEdge
 {
     int fromId;
     int toId;
 };
 
+/// Секция карантинной стены, перекрывающая улицу.
 struct QuarantineWall
 {
     int id = 0;
@@ -109,7 +119,7 @@ struct QuarantineWall
 
     int hp = 100;
     int maxHp = 100;
-    float underAttackTimerSec = 0.0F; // Белый контур при атаке (3.0с после удара)
+    float underAttackTimerSec = 0.0F; ///< Белый контур при атаке (3.0 с после удара)
 
     bool isConstructing = true;
     float buildTimeLeft = 0.0F;
@@ -120,117 +130,72 @@ struct QuarantineWall
     float teardownTimeTotal = 10.0F;
 };
 
+/// Тип городского здания.
 enum class BuildingType : uint8_t {
-    Residential = 0, // Жилой дом (базовый размер 1x)
-    Office = 1,      // Офисное здание (размер 1x - 3x)
-    Factory = 2      // Завод / промзона (размер 4x - 6x)
+    Residential = 0, ///< Жилой дом
+    Office = 1,      ///< Офисное здание
+    Factory = 2      ///< Завод / промзона
 };
 
+/// Параметры запускаемого уровня (население, бюджет, скорость времени, вспышки).
 struct LevelConfig
 {
     QString mapPngPath = ":/qt/qml/TorchkiAndZombie/levels/Level1.png";
     int initialCitizens = 2000;
     double initialBudget = 300.0;
     float startHour = 8.0F;
-    float gameHoursPerSec = 0.15F; // 0.15F 1 день = 2,6 минут
+    float gameHoursPerSec = 0.15F;
     std::vector<OutbreakEvent> outbreaks;
 };
 
-// Статическое описание уровня (не зависящее от уровня сложности)
+/// Статическое описание геометрии и правил генерации уровня из PNG-маски.
 struct LevelDefinition
 {
     QString levelName = "Manhattan";
     QString mapPngPath = ":/qt/qml/TorchkiAndZombie/levels/Level1.png";
-    float roadWidthMeters = 13.0f;
+    float roadWidthMeters = 13.0F;
     float roadWidthMetersToBuilding = 4.0F;
 
-    // Вместимость эвакуационной точки
     int evac_capacity = 50;
-
-    // Скорость в помещении
     int speedInBuildingPercent = 40;
-
-    // Процент ночных смен
     int nightWorkPercent = 0;
 
-    // Вместимость зданий - м² на 1 человека
     float factoryCapacity = 15;
     float officeCapacity = 6;
     float houseCapacity = 20;
 
-    // Проценты плотности застройки (0..100%)
-    // если сумма меньше 100, то остальное пустота
-    float factoriesPercent = 1; // Макс % заводов
-    float officesPercent = 10;  // Макс % офисов
-    float housesPercent = 100;  // Макс % жилых домов
+    float factoriesPercent = 1;
+    float officesPercent = 10;
+    float housesPercent = 100;
 
-    // Настройки размера жилого здания
-    std::vector<unsigned short int> house = {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    5, // Отступ от края карты
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    12, // Расстояние между точками спавна без наложения
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    10, // Мин ширина
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    50, // Макс ширина
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    10, // Мин длина
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    10 // Макс длина
-    };
-    // Настройки размера офиса
-    std::vector<unsigned short int> office = {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    5, // Отступ от края карты
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    40, // Расстояние между точками спавна без наложения
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    20, // Мин ширина
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    40, // Макс ширина
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    10, // Мин длина
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    20 // Макс длина
-    };
-    // Настройки размера завода
-    std::vector<unsigned short int> factory = {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           10, // Отступ от края карты
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           100, // Расстояние между точками спавна без наложения
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           30, // Мин ширина
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           70, // Макс ширина
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           24, // Мин длина
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           50 // Макс длина
-    };
+    std::vector<unsigned short int> house = {5, 12, 10, 50, 10, 10};
+    std::vector<unsigned short int> office = {5, 40, 20, 40, 10, 20};
+    std::vector<unsigned short int> factory = {10, 100, 30, 70, 24, 50};
 
-    // Приоритет прямых дорог (кратных 90 градусам) от 0
     unsigned char preferStraightRoads = 30;
-
-    // Объединять ли все дороги в единую связную сеть (MST)
     bool shouldUnionRoads = true;
 
-    // Проценты количества дорог на перекрёстках 0-100%
     unsigned char chance1 = 5;
     unsigned char chance2 = 5;
     unsigned char chance3 = 55;
     unsigned char chance4 = 35;
     unsigned char chance5 = 0;
 
-    // Палитра возможных цветов крыш (0xRRGGBB)
-    std::vector<uint32_t> roofColors = {
-                                                                                                                                                                                                                                    0x555B66, // Графитово-серый
-                                                                                                                                                                                                                                    0x646A75, // Светло-серый шифер
-                                                                                                                                                                                                                                    0x7A4B42, // Терракотовый / черепица
-                                                                                                                                                                                                                                    0x4A5D6E, // Серо-синий металл
-                                                                                                                                                                                                                                    0x6E655A // Песочно-коричневый
-    };
+    std::vector<uint32_t> roofColors = {0x555B66, 0x646A75, 0x7A4B42, 0x4A5D6E, 0x6E655A};
 
-    // Цвета полов внутри зданий (0xRRGGBB)
     uint32_t COLOR_FLOOR_HOUSE = 0x777777;
     uint32_t COLOR_FLOOR_OFFICE = 0x777777;
     uint32_t COLOR_FLOOR_FACTORY = 0x777777;
 
-    // Цвета карты
     uint32_t COLOR_CITY = 0x3A3E48;
     uint32_t COLOR_NODE = 0xFFF200;
     uint32_t COLOR_EVAC = 0xED1C24;
 
-    // Метки маршрутов эвакуации
     uint32_t COLOR_G1_START = 0x10FFFF;
     uint32_t COLOR_G1_END = 0xA0FFFF;
     uint32_t COLOR_G2_START = 0x1077FF;
     uint32_t COLOR_G2_END = 0x5077FF;
 
-    // Названия для эвакуационных точек по порядку сканирования (сверху вниз, слева направо)
     QStringList evacNames = {"Мост верхний 1",
                              "Мост побегушка",
                              "Мост нижний 2",
@@ -239,6 +204,7 @@ struct LevelDefinition
                              "Мост нижний 5"};
 };
 
+/// Описание здания на карте (позиция, вместимость, здоровье, вход с дороги).
 struct BuildingObject
 {
     int id;
@@ -258,25 +224,23 @@ struct BuildingObject
     int nearestNodeId = -1;
     float distToNode = 1e9F;
 
-    float burnTimerSec = 0.0F;        // Таймер горения (area / 15.0f сек после падения HP до 0)
-    bool isBurning = false;           // Сейчас охвачено пламенем
-    bool isBurnedOut = false;         // Полностью обуглилось
-    float underAttackTimerSec = 0.0F; // Таймер активной атаки зомби (3.0 сек после последнего удара)
+    float burnTimerSec = 0.0F;
+    bool isBurning = false;
+    bool isBurnedOut = false;
+    float underAttackTimerSec = 0.0F;
 
-    uint32_t floorColor = 0xD6C29E; // Цвет пола при снятой крыше (0xRRGGBB)
-
-    std::vector<QPointF>
-        pathFromRoad; // Ломаная тропинка от дороги (pathFromRoad.front()) до порога двери (pathFromRoad.back())
-
-    QPointF doorCenter; // Центр проёма в стене (для отрисовки разрыва стены при снятой крыше)
-    float doorAngleRad = 0.0F; // Угол ориентации проёма
+    uint32_t floorColor = 0xD6C29E;
+    std::vector<QPointF> pathFromRoad;
+    QPointF doorCenter;
+    float doorAngleRad = 0.0F;
     uint8_t r, g, b;
 };
 
+/// Данные отдельного юнита (житель, вакцинированный, зомби или солдат).
 struct Unit
 {
     int id = -1;
-    int targetUnitId = -1; // ID юнита-цели (для зомби и солдат)
+    int targetUnitId = -1;
 
     float x, y;
     float vx, vy;
@@ -284,16 +248,16 @@ struct Unit
     UnitState state = UnitState::Walking;
     bool isEvacuated = false;
 
-    int hp = 2; // Жители: 2, Солдаты: 3, Зомби: 5
+    int hp = 2;
     bool isInfected = false;
     float infectionHoursLeft = 0.0F;
 
     float panicTimerSec = 0.0F;
-    float attackCooldownSec = 0.0F; // Перезарядка укуса (0.5с) или выстрела (1.0с)
-    float repathCooldownSec = 0.0F; // Кулдаун на частое перестроение маршрута Дейкстрой
+    float attackCooldownSec = 0.0F;
+    float repathCooldownSec = 0.0F;
 
-    bool hasLastKnownTarget = false; // Помнит ли последнюю позицию цели
-    QPointF lastKnownTargetPos;      // Координаты, где цель скрылась за углом
+    bool hasLastKnownTarget = false;
+    QPointF lastKnownTargetPos;
 
     bool isNightWorker = false;
     int targetBuildingId = -1;
@@ -301,14 +265,14 @@ struct Unit
 
     float stateTimerSec = 0.0F;
     std::vector<QPointF> waypoints;
-    float laneOffset = 0.0F; // Смещение по ширине дороги в долях от roadWidth (-0.375 .. +0.375)
-    float fireDamageCooldownSec = 0.0F; // Перезарядка урона от огня (0.5 сек)
+    float laneOffset = 0.0F;
+    float fireDamageCooldownSec = 0.0F;
     float stuckTimerSec = 0.0F;
     QPointF lastCheckPos;
-    int repathCount = 0; // Попытки следовать по маршруту если застреваещь (Анти-застревание)
+    int repathCount = 0;
 
-    float lifeTimerSec = 0.0F; // Таймер службы десантника (90 сек)
-    bool isRetreating = false; // True, когда 90 сек истекли и солдат идёт на эвакуацию
-    QPointF evacBridgeEnd;     // Финишная точка моста для одиночного ухода солдата
-    bool onEvacBridge = false; // True, когда солдат добежал до выхода и идёт по мосту
+    float lifeTimerSec = 0.0F;
+    bool isRetreating = false;
+    QPointF evacBridgeEnd;
+    bool onEvacBridge = false;
 };

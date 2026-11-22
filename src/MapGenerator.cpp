@@ -9,6 +9,11 @@
 
 bool MapGenerator::generateFromLevel(const LevelDefinition &newLevel)
 {
+    // Задачи:
+    // 1. Загрузить PNG-маску, выделить зону города, узлы дорог, выходы и маршруты эвакуации
+    // 2. Построить связный дорожный граф (MST + дополнительные рёбра без пересечений)
+    // 3. Растеризовать дороги, разместить здания и проложить тропинки к дверям
+
     level = newLevel;
     image.load(level.mapPngPath);
     if (image.isNull()) {
@@ -331,6 +336,9 @@ bool MapGenerator::generateFromLevel(const LevelDefinition &newLevel)
 
 void MapGenerator::rasterizeRoads(float roadmapWidth)
 {
+    // Задачи:
+    // 1. Отрисовать рёбра дорог на backgroundImage и в маску walkMap (= 1)
+
     QPainter bgPainter(&backgroundImage);
     bgPainter.setRenderHint(QPainter::Antialiasing, false);
     QPen roadPen(QColor(24, 27, 33), roadmapWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
@@ -367,6 +375,10 @@ void MapGenerator::rasterizeRoads(float roadmapWidth)
 bool MapGenerator::tryPlaceBuilding(
     int x, int y, float bw, float bh, BuildingType type, std::vector<uint8_t> &occupied)
 {
+    // Задачи:
+    // 1. Выровнять здание по углу ближайшей дороги и проверить отсутствие наложений
+    // 2. Занять область в occupied/cityMap (= 2) и создать BuildingObject
+
     if (occupied[y * mapWidth + x] != 0)
         return false;
 
@@ -461,6 +473,10 @@ bool MapGenerator::tryPlaceBuilding(
 
 void MapGenerator::generateBuildings()
 {
+    // Задачи:
+    // 1. Рассчитать целевое количество заводов, офисов и домов по их площади и процентам
+    // 2. Последовательно разместить крупные заводы, затем офисы и жилые дома
+
     auto *rng = QRandomGenerator::global();
     std::vector<uint8_t> occupied(mapWidth * mapHeight, 1);
 
@@ -583,84 +599,14 @@ void MapGenerator::generateBuildings()
              << housesCount << "Домов | Всего:" << finalTotal;
 }
 
-unsigned int MapGenerator::generateBuilding(BuildingType type,
-                                            std::vector<unsigned short int> settings,
-                                            std::vector<uint8_t> &occupied)
-{
-    auto *rng = QRandomGenerator::global();
-    unsigned short int marginOfCityMap = settings[0]; // Отступ от края карты
-    unsigned short int marginOfSpawnBuildings
-        = settings[1]; // Расстояние между потенциальными точками спавна домов.
-    unsigned short int widthMin = settings[2];
-    unsigned short int widthMax = settings[3];
-    unsigned short int lengthMin = settings[4];
-    unsigned short int lengthMax = settings[5];
-
-    unsigned int buildingCounter = 0;
-    for (int y = marginOfCityMap; y < mapHeight - marginOfCityMap; y += marginOfSpawnBuildings) {
-        for (int x = marginOfCityMap; x < mapWidth - marginOfCityMap; x += marginOfSpawnBuildings) {
-            float buildingWidth = static_cast<float>(widthMin
-                                                     + rng->bounded(widthMax - widthMin + 1));
-            float buildingLength = static_cast<float>(lengthMin
-                                                      + rng->bounded(lengthMax - lengthMin + 1));
-
-            if (tryPlaceBuilding(x, y, buildingWidth, buildingLength, type, occupied))
-                ++buildingCounter;
-        }
-    }
-    return buildingCounter;
-}
-
-void MapGenerator::removeBuilding(BuildingType type,
-                                  int amountToRemove,
-                                  std::vector<uint8_t> &occupied)
-{
-    for (int i = 0; i < amountToRemove; ++i) {
-        // Находим нужное здание
-        int randId = 0;
-        int cycleCounter = 0;
-        auto *rng = QRandomGenerator::global();
-        do {
-            ++cycleCounter;
-            randId = rng->bounded(static_cast<int>(buildingsList.size()));
-        } while (cycleCounter < 100000 && buildingsList[randId].type != type);
-
-        if (buildingsList[randId].type != type)
-            return;
-
-        // Загружаем настройки для очистки
-        float angle = buildingsList[randId].angleRad;
-        float cosA = std::cos(angle);
-        float sinA = std::sin(angle);
-        float hw = buildingsList[randId].width * 0.5F + 3.0F;
-        float hh = buildingsList[randId].height * 0.5F + 3.0F;
-
-        // Помечаем территорию под зданием как занятую, а корпус здания как непросматриваемый (cityMap = 2)
-        float solidHw = buildingsList[randId].width * 0.5f;
-        float solidHh = buildingsList[randId].height * 0.5f;
-
-        // Очищаем занятую территорию под зданием
-        for (float ly = -hh; ly <= hh; ly += 1.0F) {
-            for (float lx = -hw; lx <= hw; lx += 1.0F) {
-                int px = static_cast<int>(buildingsList[randId].cx + lx * cosA - ly * sinA);
-                int py = static_cast<int>(buildingsList[randId].cy + lx * sinA + ly * cosA);
-                if (px >= 0 && px < mapWidth && py >= 0 && py < mapHeight) {
-                    occupied[py * mapWidth + px] = 0;
-                    cityMap[py * mapWidth + px] = 1;
-                    if (std::abs(lx) <= solidHw && std::abs(ly) <= solidHh) {
-                        cityMap[py * mapWidth + px] = 1;
-                    }
-                }
-            }
-        }
-
-        // Удаляем здание
-        buildingsList.erase(buildingsList.begin() + randId);
-    }
-}
 
 void MapGenerator::buildBuildingInteriorsAndPaths()
 {
+    // Задачи:
+    // 1. Заполнить полы зданий в walkMap (10 + id)
+    // 2. Для каждого здания (от ближних к дальним) найти кратчайшую тропинку от одной из 4 сторон к дороге
+    // 3. Встроить узлы тропинок в дорожный граф и пробить дверные проёмы в walkMap
+
     if (buildingsList.empty())
         return;
 

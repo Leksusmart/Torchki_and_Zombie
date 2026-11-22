@@ -4,34 +4,50 @@
 #include <QObject>
 #include <QPointF>
 #include <QString>
-#include <QStringList>
 #include <QTimer>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
-#include "MapGenerator.h"
-
 #include <vector>
 
+#include "MapGenerator.h"
 #include "Types.h"
+#include "ai/UnitSpatialGrid.h"
+#include "core/SimProfiler.h"
+#include "core/WorldState.h"
+#include "systems/EffectsSystem.h"
+#include "systems/EvacuationSystem.h"
+#include "systems/HelicopterSystem.h"
+#include "systems/NavigationService.h"
+#include "systems/ToolRegistry.h"
+#include "systems/WallSystem.h"
 
+/**
+ * @brief Фасад игрового мира для QML и координатор подсистем симуляции.
+ *
+ * Владеет WorldState и независимыми C++-подсистемами (NavigationService, WallSystem,
+ * EffectsSystem, HelicopterSystem, EvacuationSystem), запуская их в цикле tick().
+ */
 class GameWorld : public QObject
 {
 public:
     explicit GameWorld(QObject *parent = nullptr);
+
+    /// Инициализирует или перезапускает уровень с указанной конфигурацией.
     void startLevel(const LevelConfig &config);
 
+    // Геттеры геометрии для Renderer
     const QImage &backgroundImage() const { return g_generator.renderedBackground(); }
     const std::vector<RenderQuad> &buildingsGeometry() const { return g_buildingsGeometry; }
     const std::vector<RenderQuad> &unitGeometry() const { return g_unitGeometry; }
-    const std::vector<RenderQuad> &wallsGeometry() const { return g_wallsGeometry; }
+    const std::vector<RenderQuad> &wallsGeometry() const { return wallSystem_.geometry(); }
+    const std::vector<RenderQuad> &wallsCapsGeometry() const { return emptyCapsGeometry_; }
     const std::vector<RenderQuad> &buildingOverlaysGeometry() const
     {
         return g_buildingOverlaysGeometry;
     }
-    const std::vector<RenderQuad> &effectsGeometry() const { return g_effectsGeometry; }
+    const std::vector<RenderQuad> &effectsGeometry() const { return effectsSystem_.geometry(); }
     const std::vector<RenderQuad> &selectedPathGeometry() const { return g_selectedPathGeometry; }
-    const std::vector<RenderQuad> &wallsCapsGeometry() const { return g_wallsCapsGeometry; }
 
 signals:
     void outbreakOccurred(float x, float y, int outbreakIndex);
@@ -39,209 +55,97 @@ signals:
     void pulseWaveTriggered(float x, float y, float radius, const QString &colorHex);
 
 private: // функции
+    /// Главный шаг симуляции (~60 FPS).
     void tick();
+
+    /// Обновляет поведение и физику всех живых юнитов за шаг dt.
+    void updateAllUnits(float dt, bool &buildingsVisualDirty, bool &workplaceLabelsDirty, bool &statsDirty);
+
+    /// Пересчитывает занятость зданий, сгоревшие постройки и удаляет погибших юнитов.
+    void postUpdateUnitsAndBuildings(bool buildingsVisualDirty);
+
+    /// Заполняет геометрию всех зданий с учётом состояния (пустое, занятое, горящее, сгоревшее).
     void buildBuildingsGeometry();
-    void updateWalls(float dt);
-    void rebuildWallsGeometry();
-    void rebuildWallOverlays();
-    void rasterizeAllWallsToGrid();
-    bool canPlaceWallSegment(float x1, float y1, float x2, float y2) const;
-    void updateSelectedWallInfo();
+
+    /// Спавнит начальных мирных жителей на проходимых дорогах карты.
     void spawnInitialUnits(int citizenCount);
+
+    /// Проверяет расписание вспышек заражения и запускает их по времени.
     void processOutbreaks();
+
+    /// Заражает count случайных жителей на улице (нулевые пациенты).
     void triggerSingleOutbreak(int count, int index);
+
+    /// Пересобирает буфер геометрии юнитов и пассажиров эвакуации для рендера.
     void rebuildUnitRenderData();
+
+    /// Пересчитывает почасовой доход с офисов и заводов.
     void updateHourlyTaxes(int newHour, bool isInitialSetup = false);
+
+    /// Пересобирает список источников света от горящих зданий для ночного оверлея.
     void rebuildBurningLights();
+
+    /// Пересобирает подписи дохода над производственными зданиями.
     void rebuildWorkplaceLabels();
+
+    /// Пересобирает полоски здоровья и заполненности над зданиями.
     void rebuildBuildingOverlays();
-    float roadWidth() const { return g_generator.roadWidth(); }
+
+    /// Обновляет QVariantMap информации о выбранном здании.
     void updateSelectedBuildingInfo();
-    void callDropHelicopter(float targetX, float targetY);
-    void updateHelicopters(float dt);
-    void moveApproachingHelicopter(DropHelicopter &heli, float dt);
-    void processHoveringHelicopter(DropHelicopter &heli, float dt);
-    bool moveDepartingHelicopter(DropHelicopter &heli, float dt);
-    void spawnParatrooperSquad(QPointF dropPos);
-    void rebuildHelicoptersRenderData();
+
+    /// Обновляет QVariantMap информации о выбранном юните и строит линию его маршрута.
     void updateSelectedUnitInfo(bool logDebug = false);
+
+    /// Строит геометрию маршрута выбранного юнита для визуализации.
     void rebuildSelectedUnitPathGeometry();
+
+    /// Синхронизирует NavGrid и веса рёбер дорожного графа с текущими стенами.
+    void syncNavigationObstacles();
 
     QString buildingDisplayName(int buildingId) const;
     QString unitStateDisplayName(const Unit &u) const;
     QString unitDisplayName(int unitId) const;
 
-    // Поведение юнитов (разбито из бывшего монолита peopleUpdateActions)
-    void peopleUpdateActions(float dt,
-                             std::vector<BuildingObject> &buildings,
-                             const std::vector<size_t> &activeZombies,
-                             const std::vector<size_t> &panickingOutdoors,
-                             const std::vector<size_t> &zombieTargets,
-                             bool &buildingsVisualDirty);
-    void updateCitizenBehavior(Unit &u,
-                               size_t unitIndex,
-                               float dt,
-                               std::vector<BuildingObject> &buildings,
-                               const std::vector<size_t> &activeZombies,
-                               const std::vector<size_t> &panickingOutdoors);
-    void updateZombieBehavior(Unit &u,
-                              float dt,
-                              std::vector<BuildingObject> &buildings,
-                              const std::vector<size_t> &zombieTargets,
-                              bool &buildingsVisualDirty);
-    void stepUnitMovement(Unit &u, float dt, std::vector<BuildingObject> &buildings);
+private: // переменные и подсистемы
+    static constexpr double TAX_PER_WORKER_SEC = 0.005;
 
-    // AiSolder
-    void updateSoldierBehavior(Unit &u,
-                               float dt,
-                               std::vector<BuildingObject> &buildings,
-                               const std::vector<size_t> &activeZombies);
-    bool updateSoldierEvacuation(Unit &u,
-                                 float dt,
-                                 const std::vector<BuildingObject> &buildings,
-                                 const std::vector<size_t> &activeZombies);
-    bool moveSoldierOnEvacBridge(Unit &u, float dt);
-    int findSafestEvacExit(const Unit &u, const std::vector<size_t> &activeZombies) const;
-    void applySoldierEvacAvoidance(Unit &u, const std::vector<size_t> &activeZombies);
-    int findSoldierFireTarget(const Unit &u) const;
-    void fireAtTarget(Unit &soldier, size_t targetIdx);
-    void adjustSoldierCombatPosition(Unit &u, float targetX, float targetY, float dist);
-    int findSoldierHuntTarget(const Unit &u) const;
-    void routeSoldierToTarget(Unit &u, const Unit &target);
-    bool followSoldierWaypoints(Unit &u);
-    void patrolSoldier(Unit &u, const std::vector<BuildingObject> &buildings);
-
-    // Ai.h
-    void updateCitizenSchedule(Unit &u, std::vector<BuildingObject> &buildings);
-    void infectUnit(Unit &u, bool immediateZombie = false);
-    void applyWallRepulsion(Unit &u, float dt);
-    void applyFireAvoidanceAndDamage(Unit &u,
-                                     float dt,
-                                     const std::vector<BuildingObject> &buildings);
-
-    // Effects.h
-    void updateEffects(float dt);
-    void spawnBulletTracer(float x1, float y1, float x2, float y2);
-    void spawnPulseWave(float x, float y, float maxRadius, uint8_t r, uint8_t g, uint8_t b);
-    void spawnBurstParticles(float x, float y, int count, uint8_t r, uint8_t g, uint8_t b);
-
-    // Evacuation.h
-    void updateEvacuations(float dt);
-    void rebuildActiveEvacuationsList();
-    void rebuildEvacPoints();
-
-    // Navigation.h
-    bool hasLineOfSight(float x1, float y1, float x2, float y2) const;
-    std::vector<QPointF> buildPathBetween(QPointF startPos,
-                                          QPointF endPos,
-                                          bool ignoreQuarantineWalls = false) const;
-    std::vector<QPointF> buildPathBetween(float startPosX,
-                                          float startPosY,
-                                          float endPosX,
-                                          float endPosY,
-                                          bool ignoreQuarantineWalls = false) const;
-
-    int findNearestAvailableBuilding(float x, float y, bool wantWorkplace) const;
-    int findNearestRoadNode(float x, float y) const;
-    bool isWalkable(float x, float y) const;
-    bool isCityArea(float x, float y) const;
-    QPointF findNearestWalkable(float x, float y, float maxRadius = 40.0F) const;
-    void buildRoadGraphCache();
-    bool hasWalkableLineOfSight(float x1, float y1, float x2, float y2) const;
-    bool hasLineOfSightIgnoringQuarantineWalls(float x1, float y1, float x2, float y2) const;
-    float distanceBetween(float x, float y) const { return std::hypot(x, y); };
-
-private: // переменные
     LevelDefinition g_currentLevel;
-
     LevelConfig g_currentConfig;
-
     MapGenerator g_generator;
-
     QTimer g_timer;
 
-    bool g_paused = false;
+    WorldState state_;
+    NavigationService navService_;
+    EffectsSystem effectsSystem_;
+    HelicopterSystem helicopterSystem_;
+    EvacuationSystem evacuationSystem_;
+    WallSystem wallSystem_;
+    ToolRegistry toolRegistry_;
+    UnitSpatialGrid spatialGrid_;
+    SimProfiler profiler_;
 
-    int g_nextWallId = 1;
-    int g_selectedWallId = -1;
     int g_selectedBuildingId = -1;
-    int g_lastTrackedHour = -1;
-    int g_evacuatedTotalCount = 0;
-    int g_lostCount = 0;
-    int g_dayNumber = 1;
-    int g_citizensCount = 0;
-    int g_zombiesCount = 0;
-    int g_infectedCount = 0;
-    int g_eliminatedCount = 0;
-    int g_gridCols = 0;
-    int g_gridRows = 0;
-    int g_nextUnitId = 1;
     int g_selectedUnitId = -1;
-    int g_unitGridCols = 0;
-    int g_unitGridRows = 0;
-    int g_speedMultiplier = 1;
+    int g_lastTrackedHour = -1;
     int g_selectedTool = 0;
 
-    float g_elapsedSimSec = 0.0f;
-    float g_timeOfDayHours = 7.5f;
-    double g_budget = 300.0;
-    double g_incomePerSec = 0.0;
-
-    static constexpr int GRID_CELL_SIZE = 64;
-
-    static constexpr float BASE_CITIZEN_SPEED = 20.0F; // Базовая скорость шага жителя
-    static constexpr float RUN_SPEED = 30.0F;          // Скорость бега жителя в панике
-    static constexpr float ZOMBIE_WANDER_SPEED = BASE_CITIZEN_SPEED
-                                                 / 2; // 50% от базовой скорости жителя
-    static constexpr float ZOMBIE_CHASE_SPEED = RUN_SPEED
-                                                * 1.15F; // 115% от скорости бега жителя (21 * 1.15)
-    static constexpr double TAX_PER_WORKER_SEC = 0.005F;
-    static constexpr int UNIT_GRID_CELL = 80; // Радиус обзора зомби = 75м
-
-    QVariantList g_wallProgressBarsList;
-    QVariantList g_helicoptersList;
-    QVariantList g_dropZonesList;
-    QVariantList g_activeEvacuationsList;
-    QVariantList g_evacPoints;
     QVariantList g_burningLights;
     QVariantList g_workplaceLabels;
-    QVariantList g_equippedTools
-        = {1, 2, 3, 4}; // По умолчанию: Вакцина (1), Десант (2), Эвакуация (3), Стена (4
+    QVariantList g_equippedTools = {1, 2, 3, 4};
 
-    QVariantMap g_selectedWallInfo;
     QVariantMap g_selectedUnitInfo;
     QVariantMap g_selectedBuildingInfo;
 
-    std::vector<RenderQuad> g_wallsGeometry;
-    std::vector<RenderQuad> g_wallsCapsGeometry;
-    std::vector<QuarantineWall> g_walls;
-    std::vector<uint8_t> g_wallMask;                      // 1 = клетка перекрыта построенной стеной
-    std::vector<std::vector<size_t>> g_targetSpatialGrid; // Сетка целей для зомби (zombieTargets)
-    std::vector<std::vector<size_t>> g_zombieSpatialGrid; // Сетка активных зомби (для жителей и солдат)
-    std::vector<std::vector<int>>
-        g_buildingSpatialGrid; // Статичная сетка зданий (строится 1 раз при старте)
-    std::vector<size_t> activeZombies;
-    std::vector<size_t> panickingOutdoors;
-    std::vector<size_t> zombieTargets;
     std::vector<uint8_t> prevRoofOpen;
-    std::vector<DropHelicopter> g_helicopters;
-    std::vector<std::vector<int>>
-        g_nodeSpatialGrid; // Пространственная сетка узлов дорог для мгновенного поиска startNode
-    std::vector<std::vector<float>>
-        g_allPairsDist; // Кэш кратчайших расстояний между всеми узлами графа: [fromNode][toNode]
-    std::vector<Unit> g_units;
-    std::vector<EffectParticle> g_particles;
-    std::vector<RenderQuad> g_effectsGeometry;
     std::vector<RenderQuad> g_selectedPathGeometry;
-    std::vector<ActiveEvacuation> g_evacs;
     std::vector<RenderQuad> g_buildingOverlaysGeometry;
     std::vector<RenderQuad> g_buildingsGeometry;
     std::vector<RenderQuad> g_unitGeometry;
-    std::vector<std::vector<std::pair<int, float>>> g_roadAdj;
+    std::vector<RenderQuad> emptyCapsGeometry_;
 
 private:
     // QML BEGIN
-    // QML связи
     Q_OBJECT
     QML_ELEMENT
     Q_PROPERTY(QVariantList wallProgressBars READ wallProgressBars NOTIFY wallsChanged)
@@ -249,13 +153,10 @@ private:
     Q_PROPERTY(QVariantMap selectedUnitInfo READ selectedUnitInfo NOTIFY selectedUnitChanged)
     Q_PROPERTY(QVariantList helicopters READ helicopters NOTIFY helicoptersChanged)
     Q_PROPERTY(QVariantList dropZones READ dropZones NOTIFY helicoptersChanged)
-    Q_PROPERTY(QVariantList equippedTools
-               READ equippedTools
-               WRITE setEquippedTools
-               NOTIFY equippedToolsChanged)
-    Q_PROPERTY(QVariantMap selectedBuildingInfo
-               READ selectedBuildingInfo
-               NOTIFY selectedBuildingChanged)
+    Q_PROPERTY(QVariantList toolCategories READ toolCategories NOTIFY toolCatalogChanged)
+    Q_PROPERTY(QVariantList availableTools READ availableTools NOTIFY equippedToolsChanged)
+    Q_PROPERTY(QVariantList equippedTools READ equippedTools WRITE setEquippedTools NOTIFY equippedToolsChanged)
+    Q_PROPERTY(QVariantMap selectedBuildingInfo READ selectedBuildingInfo NOTIFY selectedBuildingChanged)
     Q_PROPERTY(QVariantList activeEvacuations READ activeEvacuations NOTIFY evacuationsChanged)
     Q_PROPERTY(int evacuatedTotalCount READ evacuatedTotalCount NOTIFY statsChanged)
     Q_PROPERTY(QVariantList evacPoints READ evacPoints NOTIFY mapUpdated)
@@ -280,36 +181,38 @@ private:
 
 public:
     // QML свойства
-    /*Q_PROPERTY*/ QVariantList wallProgressBars() const { return g_wallProgressBarsList; }
-    /*Q_PROPERTY*/ QVariantMap selectedWallInfo() const { return g_selectedWallInfo; }
-    /*Q_PROPERTY*/ QVariantList helicopters() const { return g_helicoptersList; }
-    /*Q_PROPERTY*/ QVariantList dropZones() const { return g_dropZonesList; }
-    /*Q_PROPERTY*/ QVariantList equippedTools() const { return g_equippedTools; }
-    /*Q_PROPERTY*/ void setEquippedTools(const QVariantList &tools);
-    /*Q_PROPERTY*/ QVariantMap selectedBuildingInfo() const { return g_selectedBuildingInfo; }
-    /*Q_PROPERTY*/ QVariantList activeEvacuations() const { return g_activeEvacuationsList; }
-    /*Q_PROPERTY*/ int evacuatedTotalCount() const { return g_evacuatedTotalCount; }
-    /*Q_PROPERTY*/ QVariantList evacPoints() const { return g_evacPoints; }
-    /*Q_PROPERTY*/ QVariantList burningLights() const { return g_burningLights; }
-    /*Q_PROPERTY*/ QVariantList workplaceLabels() const { return g_workplaceLabels; }
-    /*Q_PROPERTY*/ QColor waterColor() const { return g_generator.waterColor(); }
-    /*Q_PROPERTY*/ int budget() const { return static_cast<int>(g_budget); }
-    /*Q_PROPERTY*/ double incomePerSec() const { return g_incomePerSec; }
-    /*Q_PROPERTY*/ int citizensCount() const { return g_citizensCount; }
-    /*Q_PROPERTY*/ int zombiesCount() const { return g_zombiesCount; }
-    /*Q_PROPERTY*/ int infectedCount() const { return g_infectedCount; }
-    /*Q_PROPERTY*/ int eliminatedCount() const { return g_eliminatedCount; }
-    /*Q_PROPERTY*/ bool paused() const { return g_paused; }
-    /*Q_PROPERTY*/ int speedMultiplier() const { return g_speedMultiplier; }
-    /*Q_PROPERTY*/ int selectedTool() const { return g_selectedTool; }
-    /*Q_PROPERTY*/ void setSelectedTool(int tool);
-    /*Q_PROPERTY*/ int mapWidth() const { return g_generator.width(); }
-    /*Q_PROPERTY*/ int mapHeight() const { return g_generator.height(); }
-    /*Q_PROPERTY*/ QString formattedTime() const;
-    /*Q_PROPERTY*/ int dayNumber() const { return g_dayNumber; }
-    /*Q_PROPERTY*/ bool isNight() const;
-    /*Q_PROPERTY*/ float nightDarkness() const;
-    /*Q_PROPERTY*/ QVariantMap selectedUnitInfo() const { return g_selectedUnitInfo; }
+    QVariantList wallProgressBars() const { return wallSystem_.progressBarsList(); }
+    QVariantMap selectedWallInfo() const { return wallSystem_.selectedWallInfo(); }
+    QVariantList helicopters() const { return helicopterSystem_.helicoptersList(); }
+    QVariantList dropZones() const { return helicopterSystem_.dropZonesList(); }
+    QVariantList toolCategories() const { return toolRegistry_.categoriesModel(); }
+    QVariantList availableTools() const { return toolRegistry_.availableToolsModel(); }
+    QVariantList equippedTools() const { return g_equippedTools; }
+    void setEquippedTools(const QVariantList &tools);
+    QVariantMap selectedBuildingInfo() const { return g_selectedBuildingInfo; }
+    QVariantList activeEvacuations() const { return evacuationSystem_.activeEvacuationsList(); }
+    int evacuatedTotalCount() const { return state_.evacuatedTotalCount; }
+    QVariantList evacPoints() const { return evacuationSystem_.evacPointsList(); }
+    QVariantList burningLights() const { return g_burningLights; }
+    QVariantList workplaceLabels() const { return g_workplaceLabels; }
+    QColor waterColor() const { return g_generator.waterColor(); }
+    int budget() const { return static_cast<int>(state_.budget); }
+    double incomePerSec() const { return state_.incomePerSec; }
+    int citizensCount() const { return state_.citizensCount; }
+    int zombiesCount() const { return state_.zombiesCount; }
+    int infectedCount() const { return state_.infectedCount; }
+    int eliminatedCount() const { return state_.eliminatedCount; }
+    bool paused() const { return state_.paused; }
+    int speedMultiplier() const { return state_.speedMultiplier; }
+    int selectedTool() const { return g_selectedTool; }
+    void setSelectedTool(int tool);
+    int mapWidth() const { return g_generator.width(); }
+    int mapHeight() const { return g_generator.height(); }
+    QString formattedTime() const;
+    int dayNumber() const { return state_.dayNumber; }
+    bool isNight() const;
+    float nightDarkness() const;
+    QVariantMap selectedUnitInfo() const { return g_selectedUnitInfo; }
 
     // QML вызовы
     Q_INVOKABLE QVariantMap previewWall(float x1, float y1, float x2, float y2) const;
@@ -323,24 +226,26 @@ public:
     Q_INVOKABLE void toggleSpeedTo2();
     Q_INVOKABLE void toggleSpeedTo3();
     Q_INVOKABLE void toggleSpeedTo4();
+    Q_INVOKABLE void selectAt(float worldX, float worldY);
+    Q_INVOKABLE QVariantMap previewTool(int toolId, float x1, float y1, float x2, float y2) const;
+    Q_INVOKABLE bool useToolSegment(int toolId, float x1, float y1, float x2, float y2);
     Q_INVOKABLE void useToolAt(float worldX, float worldY);
-    Q_INVOKABLE QVariantMap snapEvacPoint(float worldX,
-                                          float worldY,
-                                          float snapRadius = 20.0f) const;
+    Q_INVOKABLE QVariantMap snapEvacPoint(float worldX, float worldY, float snapRadius = 20.0f) const;
     Q_INVOKABLE void selectBuildingAt(float worldX, float worldY);
+
 signals:
-    // QML свойства изменились
-    /*Q_PROPERTY*/ void wallsChanged();
-    /*Q_PROPERTY*/ void selectedWallChanged();
-    /*Q_PROPERTY*/ void selectedUnitChanged();
-    /*Q_PROPERTY*/ void helicoptersChanged();
-    /*Q_PROPERTY*/ void equippedToolsChanged();
-    /*Q_PROPERTY*/ void evacuationsChanged();
-    /*Q_PROPERTY*/ void mapUpdated();
-    /*Q_PROPERTY*/ void statsChanged();
-    /*Q_PROPERTY*/ void stateChanged();
-    /*Q_PROPERTY*/ void timeChanged();
-    /*Q_PROPERTY*/ void burningLightsChanged();
-    /*Q_PROPERTY*/ void selectedBuildingChanged();
+    void wallsChanged();
+    void selectedWallChanged();
+    void selectedUnitChanged();
+    void helicoptersChanged();
+    void equippedToolsChanged();
+    void toolCatalogChanged();
+    void evacuationsChanged();
+    void mapUpdated();
+    void statsChanged();
+    void stateChanged();
+    void timeChanged();
+    void burningLightsChanged();
+    void selectedBuildingChanged();
     // QML END
 };
